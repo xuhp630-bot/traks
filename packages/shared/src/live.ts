@@ -253,6 +253,42 @@ export interface LiveMetaRow {
   events: number;
 }
 
+/** One session in the journey explorer: pageviews/events plus entry context. */
+export interface LiveSessionSummary {
+  sessionId: string;
+  visitorId: string;
+  startedAt: number;
+  lastAt: number;
+  pageviews: number;
+  events: number;
+  entryPath: string;
+  exitPath: string;
+  country: string;
+  city: string;
+  browser: string;
+  os: string;
+  deviceType: string;
+  referrerHostname: string;
+  utmSource: string;
+  utmMedium: string;
+  utmCampaign: string;
+}
+
+/** One ordered row in a session's replayable path timeline. */
+export interface LiveJourneyStep {
+  ts: number;
+  eventType: 'pageview' | 'event';
+  pathname: string;
+  eventName: string;
+  eventMeta: string;
+  eventValue: number;
+  country: string;
+  city: string;
+  browser: string;
+  os: string;
+  deviceType: string;
+}
+
 /**
  * Everything the unfiltered today-dashboard needs, in one RPC. The api's
  * /stats/all hot path previously issued seven parallel RPCs for this - all
@@ -366,4 +402,19 @@ export interface LiveStoreApi {
     limit: number,
     filters?: LiveFilters
   ): Promise<LiveMetaRow[]>;
+  /** Recent sessions with page/event counts and entry context. */
+  sessionSummaries(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveSessionSummary[]>;
+  /** Ordered pageview + custom-event timeline for one session. */
+  sessionJourney(
+    sessionId: string,
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveJourneyStep[]>;
 }

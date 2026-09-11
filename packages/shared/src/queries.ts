@@ -1315,3 +1315,115 @@ export function buildEventsQuery(
     LIMIT ${limit}
   `;
 }
+
+/**
+ * Recent sessions with pageview/event counts and entry/exit context. This is
+ * the R2 SQL equivalent of the live store's sessionSummaries, so historical
+ * periods can power the same user-path explorer as 'today'.
+ */
+export function buildSessionsQuery(
+  siteKey: string,
+  range: PeriodRange,
+  filters?: LiveFilters,
+  limit = 50
+) {
+  const activityFilter = `event_type IN ('pageview', 'event') AND session_id != ''`;
+  return (table: string) => `
+    WITH ordered_pages AS (
+      SELECT
+        session_id,
+        pathname,
+        country,
+        city,
+        browser,
+        os,
+        device_type,
+        referrer_hostname,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts ASC) AS first_rn,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC) AS last_rn
+      FROM ${table}
+      WHERE ${whereSiteAndRange(siteKey, range, 'pageview', filters)}
+        AND session_id != ''
+    ),
+    session_stats AS (
+      SELECT
+        session_id,
+        MIN(ts) AS started_at,
+        MAX(ts) AS last_at,
+        MIN(visitor_id) AS visitor_id,
+        SUM(CASE WHEN event_type = 'pageview' THEN 1 ELSE 0 END) AS pageviews,
+        SUM(CASE WHEN event_type = 'event' THEN 1 ELSE 0 END) AS events
+      FROM ${table}
+      WHERE site_id = '${esc(siteKey)}'
+        AND ${activityFilter}
+        AND ts >= TIMESTAMP '${esc(range.from)}'
+        AND ts < TIMESTAMP '${esc(range.to)}'
+        ${ingestBounds(range.from, range.to)}
+        ${filterClause(filters)}
+      GROUP BY session_id
+      ORDER BY started_at DESC
+      LIMIT ${limit}
+    ),
+    entry_rows AS (SELECT * FROM ordered_pages WHERE first_rn = 1),
+    exit_rows AS (SELECT * FROM ordered_pages WHERE last_rn = 1)
+    SELECT
+      s.session_id AS session_id,
+      s.visitor_id AS visitor_id,
+      s.started_at AS started_at,
+      s.last_at AS last_at,
+      s.pageviews AS pageviews,
+      s.events AS events,
+      COALESCE(ep.pathname, '') AS entry_path,
+      COALESCE(xp.pathname, '') AS exit_path,
+      COALESCE(ep.country, '') AS country,
+      COALESCE(ep.city, '') AS city,
+      COALESCE(ep.browser, '') AS browser,
+      COALESCE(ep.os, '') AS os,
+      COALESCE(ep.device_type, '') AS device_type,
+      COALESCE(ep.referrer_hostname, '') AS referrer_hostname,
+      COALESCE(ep.utm_source, '') AS utm_source,
+      COALESCE(ep.utm_medium, '') AS utm_medium,
+      COALESCE(ep.utm_campaign, '') AS utm_campaign
+    FROM session_stats s
+    LEFT JOIN entry_rows ep ON ep.session_id = s.session_id
+    LEFT JOIN exit_rows xp ON xp.session_id = s.session_id
+    ORDER BY s.started_at DESC
+  `;
+}
+
+/** Ordered pageview + custom-event timeline for one session. */
+export function buildSessionJourneyQuery(
+  siteKey: string,
+  range: PeriodRange,
+  sessionId: string,
+  filters?: LiveFilters,
+  limit = 500
+) {
+  return (table: string) => `
+    SELECT
+      ts AS ts,
+      event_type AS event_type,
+      pathname AS pathname,
+      event_name AS event_name,
+      event_meta AS event_meta,
+      event_value AS event_value,
+      country AS country,
+      city AS city,
+      browser AS browser,
+      os AS os,
+      device_type AS device_type
+    FROM ${table}
+    WHERE site_id = '${esc(siteKey)}'
+      AND session_id = '${esc(sessionId)}'
+      AND event_type IN ('pageview', 'event')
+      AND ts >= TIMESTAMP '${esc(range.from)}'
+      AND ts < TIMESTAMP '${esc(range.to)}'
+      ${ingestBounds(range.from, range.to)}
+      ${filterClause(filters)}
+    ORDER BY ts ASC
+    LIMIT ${limit}
+  `;
+}

@@ -572,4 +572,27 @@ export const api = {
     await assertOk(res);
     return res.json();
   },
+
+  async getSessions(siteId: string, period: Period, filters?: AnalyticsFilters): Promise<any> {
+    const res = await client.api.analytics[':siteId'].stats.sessions.$get({
+      param: { siteId },
+      query: { period, ...filters },
+    });
+    await assertOk(res);
+    return res.json();
+  },
+
+  async getSessionJourney(
+    siteId: string,
+    period: Period,
+    sessionId: string,
+    filters?: AnalyticsFilters
+  ): Promise<any> {
+    const res = await client.api.analytics[':siteId'].stats['session-journey'].$get({
+      param: { siteId },
+      query: { period, sessionId, ...filters },
+    });
+    await assertOk(res);
+    return res.json();
+  },
 };

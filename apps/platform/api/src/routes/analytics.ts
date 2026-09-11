@@ -55,6 +55,8 @@ import {
   buildGoalEventPropQuery,
   buildGoalPagePrefixQuery,
   buildSpecialGoalsQuery,
+  buildSessionsQuery,
+  buildSessionJourneyQuery,
   isPagePrefix,
   buildFunnelQuery,
 } from '../lib/queries';
@@ -381,6 +383,11 @@ const deviceQuery = z.object({
 const eventPropsQuery = z.object({
   period: z.enum(PERIODS).default('today'),
   event: z.string().min(1).max(256),
+  ...filterFields,
+});
+const sessionQuery = z.object({
+  period: z.enum(PERIODS).default('today'),
+  sessionId: z.string().min(1).max(256),
   ...filterFields,
 });
 const utmQuery = z.object({
@@ -1830,7 +1837,7 @@ export const analyticsRoute = appWithBatch
         const rows = await liveStore(c, site.siteId).customEvents(
           ms(range.from),
           ms(range.to),
-          20,
+          500,
           filters
         );
         return c.json({
@@ -1848,7 +1855,7 @@ export const analyticsRoute = appWithBatch
       cachedR2Sql<{ name: string; count: unknown; total_value: unknown }>(
         c,
         ttl,
-        buildEventsQuery(site.siteId, range, filters)
+        buildEventsQuery(site.siteId, range, filters, 500)
       )
     );
     if (outcome instanceof Response) return outcome;
@@ -1997,5 +2004,120 @@ export const analyticsRoute = appWithBatch
 
     return c.json({
       data: aggregateMetaProps(outcome.map(r => ({ meta: r.meta, events: toNumber(r.events) }))),
+    });
+  })
+
+  .get('/:siteId/stats/sessions', requireAuth, validate('query', periodQuery), async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('siteId');
+    const query = c.req.valid('query');
+    const { period } = query;
+    const filters = parseFilters(query);
+
+    const site = await getSite(c, siteId, userId);
+    if (!site) return c.json({ error: 'Not found' }, 404);
+
+    if (period === 'today') {
+      try {
+        const range = resolvePeriod('today', new Date(), site.timezone);
+        const rows = await liveStore(c, site.siteId).sessionSummaries(
+          ms(range.from),
+          ms(range.to),
+          100,
+          filters
+        );
+        return c.json({ data: rows });
+      } catch (err) {
+        logLiveFallback(err);
+      }
+    }
+
+    const range = resolvePeriod(period, queryTime(period), site.timezone);
+    const ttl = freshTtlSeconds(period, range);
+
+    const outcome = await runQueries(c, () =>
+      cachedR2Sql<Record<string, unknown>>(
+        c,
+        ttl,
+        buildSessionsQuery(site.siteId, range, filters, 100)
+      )
+    );
+    if (outcome instanceof Response) return outcome;
+
+    return c.json({
+      data: outcome.map(r => ({
+        sessionId: String(r.session_id ?? ''),
+        visitorId: String(r.visitor_id ?? ''),
+        startedAt: toNumber(r.started_at),
+        lastAt: toNumber(r.last_at),
+        pageviews: toNumber(r.pageviews),
+        events: toNumber(r.events),
+        entryPath: String(r.entry_path ?? ''),
+        exitPath: String(r.exit_path ?? ''),
+        country: String(r.country ?? ''),
+        city: String(r.city ?? ''),
+        browser: String(r.browser ?? ''),
+        os: String(r.os ?? ''),
+        deviceType: String(r.device_type ?? ''),
+        referrerHostname: String(r.referrer_hostname ?? ''),
+        utmSource: String(r.utm_source ?? ''),
+        utmMedium: String(r.utm_medium ?? ''),
+        utmCampaign: String(r.utm_campaign ?? ''),
+      })),
+    });
+  })
+
+  .get('/:siteId/stats/session-journey', requireAuth, validate('query', sessionQuery), async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('siteId');
+    const query = c.req.valid('query');
+    const { period, sessionId } = query;
+    const filters = parseFilters(query);
+
+    const site = await getSite(c, siteId, userId);
+    if (!site) return c.json({ error: 'Not found' }, 404);
+
+    if (period === 'today') {
+      try {
+        const range = resolvePeriod('today', new Date(), site.timezone);
+        const rows = await liveStore(c, site.siteId).sessionJourney(
+          sessionId,
+          ms(range.from),
+          ms(range.to),
+          500,
+          filters
+        );
+        return c.json({ data: rows });
+      } catch (err) {
+        logLiveFallback(err);
+      }
+    }
+
+    const range = resolvePeriod(period, queryTime(period), site.timezone);
+    const ttl = freshTtlSeconds(period, range);
+
+    const outcome = await runQueries(c, () =>
+      cachedR2Sql<Record<string, unknown>>(
+        c,
+        ttl,
+        buildSessionJourneyQuery(site.siteId, range, sessionId, filters, 500)
+      )
+    );
+    if (outcome instanceof Response) return outcome;
+
+    return c.json({
+      data: outcome.map(r => ({
+        ts: toNumber(r.ts),
+        eventType: r.event_type === 'pageview' ? 'pageview' : 'event',
+        pathname: String(r.pathname ?? ''),
+        eventName: String(r.event_name ?? ''),
+        eventMeta: String(r.event_meta ?? ''),
+        eventValue: toNumber(r.event_value),
+        country: String(r.country ?? ''),
+        city: String(r.city ?? ''),
+        browser: String(r.browser ?? ''),
+        os: String(r.os ?? ''),
+        deviceType: String(r.device_type ?? ''),
+      })),
     });
   });

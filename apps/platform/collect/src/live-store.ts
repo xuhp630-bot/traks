@@ -22,6 +22,8 @@ import type {
   LiveEntryPageRow,
   LiveScreenSizeRow,
   LiveMetaRow,
+  LiveSessionSummary,
+  LiveJourneyStep,
 } from '@traks/shared';
 import {
   AUTO_EVENTS,
@@ -159,6 +161,7 @@ export class SiteLiveStore extends DurableObject<unknown> {
         lon REAL
       );
       CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
+      CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events (session_id, ts);
       -- Nearly every dashboard read predicates on
       --   event_type = 'pageview' AND ts >= ? AND ts < ?
       -- so the plain ts index still leaves engagement/custom-event rows to be
@@ -1058,7 +1061,7 @@ export class SiteLiveStore extends DurableObject<unknown> {
     limit: number,
     filters?: LiveFilters
   ): Promise<LiveCustomEventRow[]> {
-    const boundedLimit = Math.max(1, Math.min(100, limit));
+    const boundedLimit = Math.max(1, Math.min(500, limit));
     const f = SiteLiveStore.filterSql(filters);
     return this.memoized(
       `customEvents:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
@@ -1281,6 +1284,148 @@ export class SiteLiveStore extends DurableObject<unknown> {
           )
           .toArray()
           .map(r => ({ name: String(r.name), visitors: n(r.visitors), sessions: n(r.sessions) }))
+    );
+  }
+
+  async sessionSummaries(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveSessionSummary[]> {
+    const boundedLimit = Math.max(1, Math.min(100, limit));
+    const f = SiteLiveStore.filterSql(filters);
+    return this.memoized(
+      `sessionSummaries:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
+      MEMO_TTL_MS,
+      () =>
+        this.sql
+          .exec(
+            `WITH ordered_pages AS (
+               SELECT
+                 session_id, pathname, country, city, browser, os, device_type,
+                 referrer_hostname, utm_source, utm_medium, utm_campaign,
+                 ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts ASC) AS first_rn,
+                 ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC) AS last_rn
+               FROM events
+               WHERE event_type = 'pageview' AND session_id != ''
+                 AND ts >= ? AND ts < ?${f.sql}
+             ),
+             session_stats AS (
+               SELECT
+                 session_id,
+                 MIN(ts) AS started_at,
+                 MAX(ts) AS last_at,
+                 SUM(CASE WHEN event_type = 'pageview' THEN 1 ELSE 0 END) AS pageviews,
+                 SUM(CASE WHEN event_type = 'event' THEN 1 ELSE 0 END) AS events
+               FROM events
+               WHERE event_type IN ('pageview', 'event') AND session_id != ''
+                 AND ts >= ? AND ts < ?${f.sql}
+               GROUP BY session_id
+               ORDER BY started_at DESC
+               LIMIT ?
+             ),
+             entry_rows AS (SELECT * FROM ordered_pages WHERE first_rn = 1),
+             exit_rows AS (SELECT * FROM ordered_pages WHERE last_rn = 1)
+             SELECT
+               s.session_id AS sessionId,
+               COALESCE((SELECT visitor_id FROM events v WHERE v.session_id = s.session_id AND v.ts >= ? AND v.ts < ?${f.sql} ORDER BY v.ts ASC LIMIT 1), '') AS visitorId,
+               s.started_at AS startedAt,
+               s.last_at AS lastAt,
+               s.pageviews AS pageviews,
+               s.events AS events,
+               COALESCE(ep.pathname, '') AS entryPath,
+               COALESCE(xp.pathname, '') AS exitPath,
+               COALESCE(ep.country, '') AS country,
+               COALESCE(ep.city, '') AS city,
+               COALESCE(ep.browser, '') AS browser,
+               COALESCE(ep.os, '') AS os,
+               COALESCE(ep.device_type, '') AS deviceType,
+               COALESCE(ep.referrer_hostname, '') AS referrerHostname,
+               COALESCE(ep.utm_source, '') AS utmSource,
+               COALESCE(ep.utm_medium, '') AS utmMedium,
+               COALESCE(ep.utm_campaign, '') AS utmCampaign
+             FROM session_stats s
+             LEFT JOIN entry_rows ep ON ep.session_id = s.session_id
+             LEFT JOIN exit_rows xp ON xp.session_id = s.session_id
+             ORDER BY s.started_at DESC`,
+            fromMs,
+            toMs,
+            ...f.params,
+            fromMs,
+            toMs,
+            ...f.params,
+            boundedLimit,
+            fromMs,
+            toMs,
+            ...f.params
+          )
+          .toArray()
+          .map(r => ({
+            sessionId: String(r.sessionId),
+            visitorId: String(r.visitorId),
+            startedAt: n(r.startedAt),
+            lastAt: n(r.lastAt),
+            pageviews: n(r.pageviews),
+            events: n(r.events),
+            entryPath: String(r.entryPath),
+            exitPath: String(r.exitPath),
+            country: String(r.country),
+            city: String(r.city),
+            browser: String(r.browser),
+            os: String(r.os),
+            deviceType: String(r.deviceType),
+            referrerHostname: String(r.referrerHostname),
+            utmSource: String(r.utmSource),
+            utmMedium: String(r.utmMedium),
+            utmCampaign: String(r.utmCampaign),
+          }))
+    );
+  }
+
+  async sessionJourney(
+    sessionId: string,
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveJourneyStep[]> {
+    const boundedLimit = Math.max(1, Math.min(500, limit));
+    const f = SiteLiveStore.filterSql(filters);
+    return this.memoized(
+      `sessionJourney:${SiteLiveStore.esc(sessionId)}:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
+      MEMO_TTL_MS,
+      () =>
+        this.sql
+          .exec(
+            `SELECT ts, event_type AS eventType, pathname, event_name AS eventName,
+                    event_meta AS eventMeta, event_value AS eventValue,
+                    country, city, browser, os, device_type AS deviceType
+             FROM events
+             WHERE session_id = ? AND event_type IN ('pageview', 'event')
+               AND ts >= ? AND ts < ?${f.sql}
+             ORDER BY ts ASC
+             LIMIT ?`,
+            sessionId,
+            fromMs,
+            toMs,
+            ...f.params,
+            boundedLimit
+          )
+          .toArray()
+          .map(r => ({
+            ts: n(r.ts),
+            eventType: r.eventType === 'pageview' ? 'pageview' : 'event',
+            pathname: String(r.pathname),
+            eventName: String(r.eventName),
+            eventMeta: String(r.eventMeta),
+            eventValue: n(r.eventValue),
+            country: String(r.country),
+            city: String(r.city),
+            browser: String(r.browser),
+            os: String(r.os),
+            deviceType: String(r.deviceType),
+          }))
     );
   }
 }

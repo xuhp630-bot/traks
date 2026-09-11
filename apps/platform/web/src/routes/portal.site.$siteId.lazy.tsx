@@ -59,6 +59,7 @@ import { PlatformSelect } from '@/components/install/PlatformSelect';
 import { GoalsPanel } from '@/components/analytics/GoalsPanel';
 import { GoalFormModal, type GoalDef } from '@/components/analytics/GoalFormModal';
 import { GoalsDrawer } from '@/components/analytics/GoalsDrawer';
+import { EventsPathsExplorer } from '@/components/analytics/EventsPathsExplorer';
 import { FunnelFormModal } from '@/components/analytics/FunnelFormModal';
 import { FunnelsDrawer } from '@/components/analytics/FunnelsDrawer';
 import { FunnelsPanel } from '@/components/analytics/FunnelsPanel';
@@ -1050,9 +1051,6 @@ function SiteAnalyticsPage(): ReactElement {
   const [deviceTab, setDeviceTab] = useState('browser');
   // Links panel: outbound clicks and file downloads share one card
   const [linkTab, setLinkTab] = useState('outbound');
-  // Drill-down: when set, the Custom Events panel shows this event's props
-  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-
   // Lazy-render sentinels for below-fold sections
   const [belowFoldRef, belowFoldVisible] = useLazyVisible();
 
@@ -1330,9 +1328,6 @@ function SiteAnalyticsPage(): ReactElement {
       belowFoldVisible && deviceTab === 'size'
     )
   );
-  const eventsQ = useQuery(
-    tileOpts(['events'], () => api.getEvents(siteId, period, filters), belowFoldVisible)
-  );
   const botsQ = useQuery(
     tileOpts(['bots'], () => api.getBots(siteId, period, filters), belowFoldVisible)
   );
@@ -1381,16 +1376,6 @@ function SiteAnalyticsPage(): ReactElement {
       false
     )
   );
-  const eventPropsQ = useQuery(
-    tileOpts(
-      ['event-props', selectedEvent],
-      () => api.getEventProps(siteId, period, selectedEvent!, filters),
-      belowFoldVisible && selectedEvent !== null,
-      false,
-      false
-    )
-  );
-
   const [liveOpen, setLiveOpen] = useState(false);
 
   const site = (siteData as any)?.data;
@@ -1472,10 +1457,6 @@ function SiteAnalyticsPage(): ReactElement {
     ...r,
     icon: <DimensionIcon kind={deviceTab as 'browser' | 'os' | 'device' | 'size'} name={r.name} />,
   }));
-
-  const events = (eventsQ.data as any)?.data as
-    | { name: string; count: number; totalValue: number }[]
-    | undefined;
 
   return (
     <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
@@ -1750,43 +1731,11 @@ function SiteAnalyticsPage(): ReactElement {
                 onAdd={canManage ? () => setGoalForm({ goal: null }) : undefined}
                 onManage={canManage ? () => setGoalsOpen(true) : undefined}
               />
-              {selectedEvent === null ? (
-                <PanelCard
-                  title="Custom Events"
-                  labelHeader="Event"
-                  valueHeader="Count"
-                  items={events?.map(e => ({ name: e.name, visitors: e.count }))}
-                  isLoading={eventsQ.isLoading}
-                  isError={eventsQ.isError}
-                  emptyText="No custom events yet"
-                  onItemClick={item => setSelectedEvent(item.name)}
-                />
-              ) : (
-                <PanelCard
-                  title={selectedEvent}
-                  labelHeader="Property"
-                  valueHeader="Events"
-                  items={(
-                    (eventPropsQ.data as any)?.data as
-                      | { key: string; value: string; events: number }[]
-                      | undefined
-                  )?.map(p => ({
-                    name: `${p.key}: ${p.value}`,
-                    visitors: p.events,
-                  }))}
-                  isLoading={eventPropsQ.isLoading}
-                  isError={eventPropsQ.isError}
-                  emptyText="No properties on this event"
-                  headerAction={
-                    <button
-                      onClick={() => setSelectedEvent(null)}
-                      className="ml-auto shrink-0 rounded-full bg-muted px-3 py-1 text-[11px] font-semibold text-foreground hover:bg-muted transition-colors cursor-pointer"
-                    >
-                      ← All events
-                    </button>
-                  }
-                />
-              )}
+              <EventsPathsExplorer
+                siteId={siteId}
+                period={period}
+                filters={filters}
+              />
               <PanelCard
                 title="Links"
                 labelHeader="URL"
