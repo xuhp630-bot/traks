@@ -1731,11 +1731,7 @@ function SiteAnalyticsPage(): ReactElement {
                 onAdd={canManage ? () => setGoalForm({ goal: null }) : undefined}
                 onManage={canManage ? () => setGoalsOpen(true) : undefined}
               />
-              <EventsPathsExplorer
-                siteId={siteId}
-                period={period}
-                filters={filters}
-              />
+              <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
               <PanelCard
                 title="Links"
                 labelHeader="URL"

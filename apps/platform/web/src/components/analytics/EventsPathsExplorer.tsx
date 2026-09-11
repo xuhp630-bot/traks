@@ -135,11 +135,7 @@ function Timeline({ steps }: { steps: JourneyStep[] }): ReactElement {
                   isPage ? 'bg-[#F2F1ED] text-[#6E6C7C]' : 'bg-[#3D3B4F] text-white'
                 )}
               >
-                {isPage ? (
-                  <FileText className="h-3 w-3" />
-                ) : (
-                  <MousePointer2 className="h-3 w-3" />
-                )}
+                {isPage ? <FileText className="h-3 w-3" /> : <MousePointer2 className="h-3 w-3" />}
               </span>
               {index < steps.length - 1 && <span className="mt-1 w-px flex-1 bg-[#E6E4DE]" />}
             </div>
@@ -189,7 +185,7 @@ function EventsView({
   });
 
   const allEvents = useMemo(
-    () => ((eventsQ.data as { data?: EventRow[] } | undefined)?.data ?? []),
+    () => (eventsQ.data as { data?: EventRow[] } | undefined)?.data ?? [],
     [eventsQ.data]
   );
   const filteredEvents = useMemo(() => {
@@ -198,7 +194,7 @@ function EventsView({
     return allEvents.filter(event => event.name.toLowerCase().includes(needle));
   }, [allEvents, query]);
   const props = useMemo(
-    () => ((propsQ.data as { data?: EventPropRow[] } | undefined)?.data ?? []),
+    () => (propsQ.data as { data?: EventPropRow[] } | undefined)?.data ?? [],
     [propsQ.data]
   );
 
@@ -396,7 +392,14 @@ function PathsView({
     refetchInterval: period === 'today' ? 15_000 : false,
   });
   const journeyQ = useQuery({
-    queryKey: ['site-analytics', siteId, 'paths-page-journey', period, filterKey, selectedSession?.sessionId],
+    queryKey: [
+      'site-analytics',
+      siteId,
+      'paths-page-journey',
+      period,
+      filterKey,
+      selectedSession?.sessionId,
+    ],
     queryFn: async () =>
       api.getSessionJourney(siteId, period, selectedSession?.sessionId ?? '', filters),
     enabled: selectedSession !== null,
@@ -404,7 +407,7 @@ function PathsView({
   });
 
   const sessions = useMemo(
-    () => ((sessionsQ.data as { data?: SessionSummary[] } | undefined)?.data ?? []),
+    () => (sessionsQ.data as { data?: SessionSummary[] } | undefined)?.data ?? [],
     [sessionsQ.data]
   );
   const filteredSessions = useMemo(() => {
@@ -417,18 +420,17 @@ function PathsView({
     );
   }, [sessions, query]);
   const steps = useMemo(
-    () => ((journeyQ.data as { data?: JourneyStep[] } | undefined)?.data ?? []),
+    () => (journeyQ.data as { data?: JourneyStep[] } | undefined)?.data ?? [],
     [journeyQ.data]
   );
 
   const header = (
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h3 className="text-[15px] font-bold tracking-[-0.01em] text-[#3D3B4F]">
-          User Paths
-        </h3>
+        <h3 className="text-[15px] font-bold tracking-[-0.01em] text-[#3D3B4F]">User Paths</h3>
         <p className="mt-0.5 text-[12px] text-[#9B9590]">
-          {sessions.length} sessions · click a session to replay its full pageview and event timeline.
+          {sessions.length} sessions · click a session to replay its full pageview and event
+          timeline.
         </p>
       </div>
       <div className="relative w-full sm:w-72">
@@ -456,7 +458,11 @@ function PathsView({
           ) : sessionsQ.isLoading ? (
             <div className="space-y-2.5">
               {[95, 78, 62, 48].map((width, index) => (
-                <div key={index} className="h-10 animate-pulse rounded-lg bg-muted" style={{ width: `${width}%` }} />
+                <div
+                  key={index}
+                  className="h-10 animate-pulse rounded-lg bg-muted"
+                  style={{ width: `${width}%` }}
+                />
               ))}
             </div>
           ) : filteredSessions.length === 0 ? (
@@ -528,7 +534,11 @@ function PathsView({
           ) : journeyQ.isLoading ? (
             <div className="space-y-2.5">
               {[85, 70, 55, 42].map((width, index) => (
-                <div key={index} className="h-9 animate-pulse rounded-lg bg-muted" style={{ width: `${width}%` }} />
+                <div
+                  key={index}
+                  className="h-9 animate-pulse rounded-lg bg-muted"
+                  style={{ width: `${width}%` }}
+                />
               ))}
             </div>
           ) : (
