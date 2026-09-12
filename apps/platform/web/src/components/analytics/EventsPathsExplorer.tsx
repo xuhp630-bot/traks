@@ -1554,24 +1554,30 @@ export function EventsPathsExplorer({
 
   return (
     <div className="space-y-6">
-      <div className="inline-flex rounded-full border border-[#E6E4DE] bg-white p-1">
-        {[
-          { key: 'events', label: 'All Events' },
-          { key: 'paths', label: 'User Paths' },
-        ].map(option => (
-          <button
-            key={option.key}
-            onClick={() => setView(option.key as ExplorerView)}
-            className={cn(
-              'rounded-full px-4 py-1.5 text-[12px] font-medium transition-all cursor-pointer',
-              view === option.key
-                ? 'bg-[#3D3B4F] text-white font-semibold'
-                : 'text-[#9B9590] hover:text-[#6b6560]'
-            )}
-          >
-            {option.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[17px] font-bold tracking-[-0.01em] text-[#3D3B4F]">
+          Journey Tracking
+        </h2>
+        <div className="inline-flex rounded-full border border-[#E6E4DE] bg-white p-1">
+          {[
+            { key: 'events', label: 'All Events', Icon: Layers },
+            { key: 'paths', label: 'User Paths', Icon: Route },
+          ].map(option => (
+            <button
+              key={option.key}
+              onClick={() => setView(option.key as ExplorerView)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium transition-all cursor-pointer',
+                view === option.key
+                  ? 'bg-[#3D3B4F] text-white font-semibold'
+                  : 'text-[#9B9590] hover:text-[#6b6560]'
+              )}
+            >
+              <option.Icon className="h-3.5 w-3.5" />
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
       {view === 'events' ? (
         <EventsView siteId={siteId} period={period} filters={filters} filterKey={filterKey} />

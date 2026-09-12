@@ -1577,6 +1577,10 @@ function SiteAnalyticsPage(): ReactElement {
           className={`space-y-6 transition-opacity duration-300 ${switching ? 'opacity-50' : ''}`}
           aria-busy={switching}
         >
+          {/* Tracking health stays above the fold so newly shipped events and
+              path coverage are visible without hunting through goal panels. */}
+          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
+
           {/* Main chart card: metric tiles + timeseries */}
           <ChartCard
             stats={(mainQ.data as any)?.data}
@@ -1589,10 +1593,6 @@ function SiteAnalyticsPage(): ReactElement {
             onMetricChange={setChartMetric}
             period={period}
           />
-
-          {/* Tracking health stays above the fold so newly shipped events and
-              path coverage are visible without hunting through goal panels. */}
-          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
 
           {/* Pages + Sources */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
