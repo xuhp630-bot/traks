@@ -24,6 +24,7 @@ const DIST = path.join(ROOT, 'installer/dist');
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const CATALOG_TOKEN = process.env.TRAKS_CATALOG_TOKEN;
 const INSTANCE = process.env.TRAKS_INSTANCE || 'traks-selfhost';
+const UPDATE_ONLY = process.env.TRAKS_UPDATE_ONLY === '1';
 const VERSION = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 const us = INSTANCE.replaceAll('-', '_');
@@ -68,9 +69,9 @@ const API_TOKEN =
   process.env.CLOUDFLARE_OAUTH_TOKEN ||
   getWranglerOAuthToken();
 
-if (!ACCOUNT_ID || !API_TOKEN || !CATALOG_TOKEN) {
+if (!ACCOUNT_ID || !API_TOKEN || (!UPDATE_ONLY && !CATALOG_TOKEN)) {
   console.error(
-    'Missing CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN/CLOUDFLARE_OAUTH_TOKEN, or TRAKS_CATALOG_TOKEN.'
+    'Missing CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN/CLOUDFLARE_OAUTH_TOKEN, or TRAKS_CATALOG_TOKEN. TRAKS_CATALOG_TOKEN is only optional with TRAKS_UPDATE_ONLY=1.'
   );
   process.exit(1);
 }
@@ -87,9 +88,25 @@ async function cf(method, pathname, body, { jwt, form, tolerate = [] } = {}) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const response = await fetch(`${API}${pathname}`, { method, headers, body: payload });
-  const data = await response.json().catch(() => null);
-  if (response.ok && data?.success !== false) return data?.result ?? data;
+  let response;
+  let data;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      response = await fetch(`${API}${pathname}`, { method, headers, body: payload });
+      data = await response.json().catch(() => null);
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      await sleep(attempt * 1000);
+      continue;
+    }
+    if (response.ok && data?.success !== false) return data?.result ?? data;
+    const transient = response.status === 429 || response.status >= 500;
+    if (transient && attempt < 4) {
+      await sleep(attempt * 1000);
+      continue;
+    }
+    break;
+  }
   const errors = data?.errors || [{ code: response.status, message: response.statusText }];
   if (errors.some(error => tolerate.includes(error.code))) return { tolerated: errors[0].code };
   throw new Error(
@@ -284,6 +301,13 @@ async function ensurePipeline() {
       sql: `INSERT INTO ${N.sink} SELECT * FROM ${N.stream}`,
     });
   }
+  return stream.id;
+}
+
+async function findPipelineStream() {
+  const streams = await cf('GET', `/accounts/${ACCOUNT_ID}/pipelines/v1/streams?per_page=100`);
+  const stream = (streams || []).find(item => item.name === N.stream);
+  if (!stream) throw new Error(`update-only deploy could not find Pipeline stream ${N.stream}`);
   return stream.id;
 }
 
@@ -500,8 +524,13 @@ async function main() {
   const d1Id = await step('Ensure D1', ensureD1)();
   await step('Apply migrations', () => applyMigrations(d1Id))();
   const kvId = await step('Ensure KV cache', ensureKv)();
-  await step('Ensure R2 bucket and catalog', ensureBucketAndCatalog)();
-  const streamId = await step('Ensure Pipelines', ensurePipeline)();
+  let streamId;
+  if (UPDATE_ONLY) {
+    streamId = await step('Reuse Pipelines', findPipelineStream)();
+  } else {
+    await step('Ensure R2 bucket and catalog', ensureBucketAndCatalog)();
+    streamId = await step('Ensure Pipelines', ensurePipeline)();
+  }
   const collectExisted = await workerExists(N.collectWorker);
 
   await step('Deploy collect Worker', () =>
@@ -579,6 +608,19 @@ async function main() {
   const apiSecrets = await existingSecrets(N.apiWorker);
   const collectSecrets = await existingSecrets(N.collectWorker);
   await step('Set secrets', async () => {
+    if (UPDATE_ONLY) {
+      const missing = [
+        !apiSecrets.has('BETTER_AUTH_SECRET') && `${N.apiWorker}:BETTER_AUTH_SECRET`,
+        !apiSecrets.has('R2_SQL_TOKEN') && `${N.apiWorker}:R2_SQL_TOKEN`,
+        !collectSecrets.has('VISITOR_HASH_SECRET') && `${N.collectWorker}:VISITOR_HASH_SECRET`,
+      ].filter(Boolean);
+      if (missing.length > 0) {
+        throw new Error(
+          `update-only deploy is missing existing secrets: ${missing.join(', ')}. Run the full provisioner with TRAKS_CATALOG_TOKEN.`
+        );
+      }
+      return;
+    }
     if (!apiSecrets.has('BETTER_AUTH_SECRET')) {
       await putSecret(N.apiWorker, 'BETTER_AUTH_SECRET', randomHex(32));
     }

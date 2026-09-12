@@ -115,6 +115,48 @@ type ExplorerView = 'events' | 'paths';
 const GRANULAR_ENGAGEMENT_WAVE = 'Granular engagement';
 const WAVE_ORDER = [GRANULAR_ENGAGEMENT_WAVE, 'Commerce and forms', 'Controls and errors'];
 const STAGE_ORDER = ['Arrival', 'Discovery', 'Engagement', 'Intent', 'Conversion', 'Retention'];
+const DEEP_ENGAGEMENT_EVENTS = [
+  {
+    name: 'concrete_workflow_section_viewed',
+    label: 'Section visible',
+    flow: 'A visitor reaches a tracked page section.',
+  },
+  {
+    name: 'concrete_workflow_section_engagement',
+    label: 'Section deep read',
+    flow: 'A visible section reaches a sustained dwell milestone.',
+  },
+  {
+    name: 'concrete_workflow_content_selected',
+    label: 'Content selected',
+    flow: 'A visitor selects useful page or result content.',
+  },
+  {
+    name: 'concrete_workflow_result_engagement',
+    label: 'Result dwell',
+    flow: 'The calculator result panel stays visible over time.',
+  },
+  {
+    name: 'concrete_workflow_scroll_backtrack',
+    label: 'Scroll backtrack',
+    flow: 'A visitor moves back up to compare or reconsider.',
+  },
+  {
+    name: 'concrete_workflow_field_completed',
+    label: 'Field completed',
+    flow: 'A non-sensitive field is completed, without its value.',
+  },
+  {
+    name: 'concrete_workflow_form_abandoned',
+    label: 'Form abandoned',
+    flow: 'A touched form is left before successful submission.',
+  },
+  {
+    name: 'concrete_workflow_exit_intent',
+    label: 'Exit intent',
+    flow: 'A desktop pointer exits through the top viewport edge.',
+  },
+] as const;
 
 function formatTime(ms: number): string {
   if (!ms) return '-';
@@ -174,7 +216,11 @@ function Timeline({ steps }: { steps: JourneyStep[] }): ReactElement {
     <ol>
       {steps.map((step, index) => {
         const isPage = step.eventType === 'pageview';
-        const title = isPage ? step.pathname || '/' : step.eventName || 'Event';
+        const deepSignal = DEEP_ENGAGEMENT_EVENTS.find(signal => signal.name === step.eventName);
+        const isDeepSignal = Boolean(deepSignal);
+        const title = isPage
+          ? step.pathname || '/'
+          : deepSignal?.label || step.eventName || 'Event';
         const detail = isPage ? '' : step.pathname;
         const meta = parseMeta(step.eventMeta);
         return (
@@ -183,20 +229,42 @@ function Timeline({ steps }: { steps: JourneyStep[] }): ReactElement {
               <span
                 className={cn(
                   'mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-                  isPage ? 'bg-[#F2F1ED] text-[#6E6C7C]' : 'bg-[#3D3B4F] text-white'
+                  isPage
+                    ? 'bg-[#F2F1ED] text-[#6E6C7C]'
+                    : isDeepSignal
+                      ? 'bg-[#4338CA] text-white'
+                      : 'bg-[#3D3B4F] text-white'
                 )}
               >
-                {isPage ? <FileText className="h-3 w-3" /> : <MousePointer2 className="h-3 w-3" />}
+                {isPage ? (
+                  <FileText className="h-3 w-3" />
+                ) : isDeepSignal ? (
+                  <Sparkles className="h-3 w-3" />
+                ) : (
+                  <MousePointer2 className="h-3 w-3" />
+                )}
               </span>
               {index < steps.length - 1 && <span className="mt-1 w-px flex-1 bg-[#E6E4DE]" />}
             </div>
             <div className="min-w-0 flex-1 pt-0.5">
               <div className="flex items-baseline justify-between gap-3">
-                <p className="truncate text-[13px] font-medium text-[#3D3B4F]">{title}</p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="truncate text-[13px] font-medium text-[#3D3B4F]">{title}</p>
+                  {isDeepSignal && (
+                    <span className="shrink-0 rounded-full bg-[#EEF2FF] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[#4338CA]">
+                      Deep signal
+                    </span>
+                  )}
+                </div>
                 <span className="shrink-0 text-[11px] tabular-nums text-[#B5B0AA]">
                   {formatTime(step.ts)}
                 </span>
               </div>
+              {isDeepSignal && (
+                <p className="mt-0.5 truncate font-mono text-[10px] text-[#6366F1]">
+                  {step.eventName}
+                </p>
+              )}
               {detail && <p className="mt-0.5 truncate text-[12px] text-[#9B9590]">{detail}</p>}
               {meta && <p className="mt-1 truncate text-[12px] text-[#6E6C7C]">{meta}</p>}
             </div>
@@ -212,11 +280,13 @@ function EventsView({
   period,
   filters,
   filterKey,
+  onOpenPaths,
 }: {
   siteId: string;
   period: Period;
   filters: AnalyticsFilters;
   filterKey: string;
+  onOpenPaths: () => void;
 }): ReactElement {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | EventCoverage>('all');
@@ -465,6 +535,8 @@ function EventsView({
       <NewTrackingWavesPanel
         rows={rows}
         waves={waves}
+        catalogTotal={stats.total}
+        onOpenPaths={onOpenPaths}
         onWaveFilter={wave => {
           setWaveFilter(wave);
           setStatusFilter(wave === 'all' ? 'all' : 'missing');
@@ -592,6 +664,7 @@ function EventsView({
       <EventCoverageMatrix
         categories={categories}
         rows={filteredEvents}
+        catalogTotal={stats.total}
         onSelect={event => setSelectedEvent(event)}
       />
 
@@ -1034,10 +1107,14 @@ function PageEventCoveragePanel({
 function NewTrackingWavesPanel({
   rows,
   waves,
+  catalogTotal,
+  onOpenPaths,
   onWaveFilter,
 }: {
   rows: EventDisplayRow[];
   waves: string[];
+  catalogTotal: number;
+  onOpenPaths: () => void;
   onWaveFilter: (wave: string) => void;
 }): ReactElement | null {
   const newWaves = waves.filter(wave => wave !== 'Foundation' && wave !== 'Uncataloged');
@@ -1053,103 +1130,141 @@ function NewTrackingWavesPanel({
     });
   const missingCount = spotlightRows.filter(row => row.status === 'missing').length;
   const receivedCount = spotlightRows.filter(row => row.status === 'received').length;
+  const rowByName = new Map(rows.map(row => [row.name, row]));
+  const granularRows = DEEP_ENGAGEMENT_EVENTS.map(signal => ({
+    signal,
+    row: rowByName.get(signal.name),
+  }));
+  const granularReceived = granularRows.filter(item => item.row?.status === 'received').length;
+  const allEventsReceived = rows.filter(row => row.status === 'received').length;
 
   return (
-    <section className="rounded-[20px] border border-[#C7D2FE] bg-white p-6 shadow-float">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-[#4338CA]" />
-            <h3 className="text-[15px] font-bold text-[#3D3B4F]">New Tracking Waves</h3>
+    <section className="overflow-hidden rounded-[20px] bg-[#252434] text-white shadow-float">
+      <div className="border-b border-white/10 px-6 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div className="max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#C7D2FE] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#312E81]">
+                <Sparkles className="h-3 w-3" /> Latest instrumentation
+              </span>
+              <span className="rounded-full border border-white/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#C9C7D8]">
+                Granular engagement
+              </span>
+            </div>
+            <h3 className="mt-3 text-[20px] font-bold tracking-[-0.02em]">
+              Deep engagement signals
+            </h3>
+            <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#B8B5C8]">
+              Eight new production signals reveal what visitors read, compare, complete and abandon
+              after they enter the site. Sensitive field values are never collected.
+            </p>
           </div>
-          <p className="mt-1 max-w-2xl text-[12px] text-[#9B9590]">
-            The latest production waves are separated from the original catalog. A gray chip means
-            the code path is instrumented but this period has not triggered it yet.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <div className="rounded-lg border border-[#C7D2FE] bg-[#EEF2FF] px-3 py-2">
-            <div className="text-[20px] font-bold leading-none tabular-nums text-[#4338CA]">
-              {receivedCount}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <div className="min-w-[96px] rounded-lg bg-white/8 px-3 py-2.5">
+              <div className="text-[24px] font-bold leading-none tabular-nums">{catalogTotal}</div>
+              <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#B8B5C8]">
+                Tracked events
+              </div>
             </div>
-            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6366F1]">
-              Received
+            <div className="min-w-[96px] rounded-lg bg-emerald-400/15 px-3 py-2.5">
+              <div className="text-[24px] font-bold leading-none tabular-nums text-emerald-300">
+                {granularReceived}
+              </div>
+              <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-emerald-200/80">
+                Deep live
+              </div>
             </div>
-          </div>
-          <div className="rounded-lg border border-[#E6E4DE] bg-[#FAFAF8] px-3 py-2">
-            <div className="text-[20px] font-bold leading-none tabular-nums text-[#6E6C7C]">
-              {missingCount}
-            </div>
-            <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#9B9590]">
-              Awaiting first trigger
+            <div className="col-span-2 rounded-lg bg-white/8 px-3 py-2.5 sm:col-span-1">
+              <div className="text-[24px] font-bold leading-none tabular-nums">
+                {allEventsReceived}
+              </div>
+              <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-[#B8B5C8]">
+                Events received
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {newWaves.map(wave => {
-          const waveRows = spotlightRows.filter(row => row.wave === wave);
-          const received = waveRows.filter(row => row.status === 'received').length;
-          const total = waveRows.length;
-          const coverage = total === 0 ? 0 : received / total;
-          return (
-            <article key={wave} className="rounded-lg border border-[#E6E4DE] bg-[#FAFAF8] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Layers className="h-3.5 w-3.5 shrink-0 text-[#4338CA]" />
-                  <h4 className="truncate text-[13px] font-semibold text-[#3D3B4F]">{wave}</h4>
-                  {wave === GRANULAR_ENGAGEMENT_WAVE && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#4338CA] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
-                      <Sparkles className="h-2.5 w-2.5" /> Latest
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => onWaveFilter(wave)}
-                  className="shrink-0 rounded-full bg-[#3D3B4F] px-2.5 py-1 text-[10px] font-semibold text-white transition-colors hover:bg-[#54516D]"
-                >
-                  Show missing
-                </button>
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-[#9B9590]">
-                <span className="tabular-nums">
-                  {received}/{total} received
-                </span>
-                <span className="tabular-nums">{Math.round(coverage * 100)}%</span>
-              </div>
-              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#EDEBE6]">
-                <div
-                  className="h-full rounded-full bg-emerald-500"
-                  style={{ width: `${coverage * 100}%` }}
-                />
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {waveRows.map(event => (
-                  <button
-                    key={event.key}
-                    onClick={() => onWaveFilter(event.wave)}
-                    title={`${event.name}\n${event.category} · ${event.journeyStage}`}
-                    className="flex h-8 min-w-0 items-center gap-2 rounded-md border border-[#EDEBE6] bg-white px-2 text-left transition-colors hover:border-[#C9C5BD]"
+      <div className="px-6 py-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#C9C7D8]">
+              Visitor intent path
+            </p>
+            <p className="mt-1 text-[12px] text-[#918EA4]">
+              Visibility → depth → comparison → completion → abandonment or exit
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={onOpenPaths}
+              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3 text-[11px] font-bold text-[#252434] transition-colors hover:bg-[#E9E7F4]"
+            >
+              <Route className="h-3.5 w-3.5" /> Open user paths
+            </button>
+            <button
+              onClick={() => onWaveFilter(GRANULAR_ENGAGEMENT_WAVE)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-white/15 px-3 text-[11px] font-semibold text-white transition-colors hover:bg-white/10"
+            >
+              <ListFilter className="h-3.5 w-3.5" /> Filter catalog
+            </button>
+          </div>
+        </div>
+
+        <div className="grid gap-px overflow-hidden rounded-xl border border-white/10 bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
+          {granularRows.map(({ signal, row }, index) => {
+            const received = row?.status === 'received';
+            return (
+              <button
+                key={signal.name}
+                onClick={() => row && onWaveFilter(GRANULAR_ENGAGEMENT_WAVE)}
+                disabled={!row}
+                title={`${signal.name}\n${row?.description || signal.flow}`}
+                className={cn(
+                  'group min-h-[118px] bg-[#2D2B3D] p-3.5 text-left transition-colors',
+                  row && 'hover:bg-[#353348]'
+                )}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-[10px] font-bold tabular-nums text-[#7D7A91]">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide',
+                      received ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/8 text-[#918EA4]'
+                    )}
                   >
                     <span
                       className={cn(
-                        'h-2.5 w-2.5 shrink-0 rounded-sm',
-                        event.status === 'received' ? 'bg-emerald-500' : 'bg-[#DAD7CF]'
+                        'h-1.5 w-1.5 rounded-full',
+                        received ? 'bg-emerald-400' : 'bg-[#6F6C82]'
                       )}
                     />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-[#3D3B4F]">
-                      {event.name}
-                    </span>
-                    <span className="shrink-0 text-[10px] font-semibold tabular-nums text-[#9B9590]">
-                      {event.status === 'received' ? formatNumber(event.count) : '0'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </article>
-          );
-        })}
+                    {received ? formatNumber(row?.count ?? 0) : 'Waiting'}
+                  </span>
+                </div>
+                <div className="mt-3 text-[13px] font-bold text-white">{signal.label}</div>
+                <div className="mt-1 text-[11px] leading-4 text-[#AAA7BA]">{signal.flow}</div>
+                <div className="mt-2 truncate font-mono text-[9.5px] text-[#7D7A91]">
+                  {signal.name}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-black/10 px-6 py-3 text-[11px]">
+        <span className="text-[#B8B5C8]">
+          Catalog ready · {granularRows.length} deep signals · {catalogTotal} total events
+        </span>
+        <span className="flex items-center gap-2 text-[#918EA4]">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Received {receivedCount} of{' '}
+          {spotlightRows.length} newer-wave events
+          {missingCount > 0 && ` · ${missingCount} waiting for first live trigger`}
+        </span>
       </div>
     </section>
   );
@@ -1158,10 +1273,12 @@ function NewTrackingWavesPanel({
 function EventCoverageMatrix({
   categories,
   rows,
+  catalogTotal,
   onSelect,
 }: {
   categories: string[];
   rows: EventDisplayRow[];
+  catalogTotal: number;
   onSelect: (event: EventDisplayRow) => void;
 }): ReactElement {
   return (
@@ -1170,7 +1287,7 @@ function EventCoverageMatrix({
         <div>
           <h3 className="text-[15px] font-bold text-[#3D3B4F]">Event Coverage Matrix</h3>
           <p className="mt-0.5 text-[12px] text-[#9B9590]">
-            Every catalog event by category. Green means received in this period.
+            All {catalogTotal} catalog events by category. Green means received in this period.
           </p>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-[#6E6C7C]">
@@ -1333,16 +1450,26 @@ function PathFlowsPanel({ rows }: { rows: PathFlowRow[] }): ReactElement {
   };
 
   return (
-    <div className="mb-6">
-      <div className="mb-3 flex items-center gap-2">
-        <Route className="h-4 w-4 text-[#3D3B4F]" />
-        <h3 className="text-[15px] font-bold text-[#3D3B4F]">User Route Corridors</h3>
+    <div className="mb-6 overflow-hidden rounded-xl bg-[#252434] text-white">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-[#C7D2FE]" />
+            <h3 className="text-[15px] font-bold text-white">User Route Corridors</h3>
+          </div>
+          <p className="mt-1 max-w-3xl text-[12px] leading-5 text-[#AAA7BA]">
+            Follow the strongest corridors from entry page to next page and three-step sequence.
+            Then open any session to replay its pageviews and deep engagement signals in exact
+            order.
+          </p>
+        </div>
+        <div className="flex gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#C9C7D8]">
+          <span className="rounded-full border border-white/15 px-2.5 py-1">Entry</span>
+          <span className="rounded-full border border-white/15 px-2.5 py-1">Transition</span>
+          <span className="rounded-full border border-white/15 px-2.5 py-1">Sequence</span>
+        </div>
       </div>
-      <p className="mb-4 text-[12px] text-[#9B9590]">
-        The widest corridors show where online users actually travel. Open a session below to see
-        every pageview and custom event in order.
-      </p>
-      <div className="grid gap-3 xl:grid-cols-3">
+      <div className="grid gap-3 p-5 xl:grid-cols-3">
         {renderGroup('Top entry pages', groups.entries, row => [row.fromPath || '/'], true)}
         {renderGroup('Next-page transitions', groups.transitions, row =>
           [row.fromPath, row.toPath].filter(Boolean)
@@ -1591,7 +1718,13 @@ export function EventsPathsExplorer({
         </div>
       </div>
       {view === 'events' ? (
-        <EventsView siteId={siteId} period={period} filters={filters} filterKey={filterKey} />
+        <EventsView
+          siteId={siteId}
+          period={period}
+          filters={filters}
+          filterKey={filterKey}
+          onOpenPaths={() => setView('paths')}
+        />
       ) : (
         <PathsView siteId={siteId} period={period} filters={filters} filterKey={filterKey} />
       )}
