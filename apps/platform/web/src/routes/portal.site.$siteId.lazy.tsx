@@ -1475,10 +1475,11 @@ function SiteAnalyticsPage(): ReactElement {
             margins stretch the ground-colored backdrop across the content
             column so panels slide cleanly beneath it. */}
         <div className="sticky top-14 z-30 -mx-4 flex flex-wrap items-center justify-between gap-3 bg-[#F9F8F6] px-4 py-3 sm:-mx-6 sm:px-6">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 max-w-full items-center gap-3">
             <Link
               to="/portal/sites"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-[#B5B0AA] transition-all hover:bg-white hover:text-[#3D3B4F] cursor-pointer"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#B5B0AA] transition-all hover:bg-white hover:text-[#3D3B4F] cursor-pointer"
+              aria-label="Back to sites"
             >
               <ArrowLeft className="w-4 h-4" />
             </Link>
@@ -1494,12 +1495,15 @@ function SiteAnalyticsPage(): ReactElement {
                 <Globe className="h-[18px] w-[18px] text-[#6E6C7C]" strokeWidth={1.7} />
               )}
             </span>
-            <div>
-              <h1 className="text-[19px] font-bold leading-tight text-[#3D3B4F] tracking-[-0.02em]">
+            <div className="min-w-0">
+              <h1
+                className="truncate text-[19px] font-bold leading-tight text-[#3D3B4F] tracking-[-0.02em]"
+                title={site?.name}
+              >
                 {site?.name || 'Analytics'}
               </h1>
-              <div className="mt-1 flex items-center gap-2.5 text-[12.5px]">
-                {site?.domain && <span className="text-[#9B9590]">{site.domain}</span>}
+              <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+                {site?.domain && <span className="break-all text-[#9B9590]">{site.domain}</span>}
                 {site?.domain && currentVisitors !== null && (
                   <span className="h-[3px] w-[3px] rounded-full bg-[#D8D2CA]" />
                 )}
