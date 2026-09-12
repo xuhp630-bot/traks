@@ -462,6 +462,37 @@ function EventsView({
 
   const props = useMemo(() => (propsQ.data as EventPropRow[] | undefined) ?? [], [propsQ.data]);
 
+  if (eventsQ.isError || catalogQ.isError) {
+    return (
+      <div role="alert" className="rounded-[20px] border border-coral/30 bg-white p-6 shadow-float">
+        <h3 className="font-semibold">Event coverage is unavailable</h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Events or the catalog could not load. This is not evidence that tracking is missing.
+        </p>
+        <button
+          type="button"
+          className="mt-4 min-h-11 rounded-lg bg-muted px-4 text-sm font-medium"
+          onClick={() => {
+            void eventsQ.refetch();
+            void catalogQ.refetch();
+          }}
+        >
+          Retry event coverage
+        </button>
+      </div>
+    );
+  }
+  if (eventsQ.isLoading || catalogQ.isLoading) {
+    return (
+      <div
+        role="status"
+        className="rounded-[20px] bg-white p-6 text-sm text-muted-foreground shadow-float"
+      >
+        Loading events and catalog…
+      </div>
+    );
+  }
+
   if (selectedEvent !== null) {
     return (
       <div className="rounded-[20px] bg-white p-6 shadow-float">
@@ -532,42 +563,53 @@ function EventsView({
 
   return (
     <div className="space-y-4">
-      <NewTrackingWavesPanel
-        rows={rows}
-        waves={waves}
-        catalogTotal={stats.total}
-        onOpenPaths={onOpenPaths}
-        onWaveFilter={wave => {
-          setWaveFilter(wave);
-          setStatusFilter(wave === 'all' ? 'all' : 'missing');
-        }}
-      />
-      <JourneyStageCoverage
-        rows={rows}
-        onStageFilter={stage => {
-          setStageFilter(stage);
-          setStatusFilter('all');
-        }}
-      />
-      <PageEventCoveragePanel
-        rows={rows}
-        eventPages={eventPages}
-        isError={eventPagesQ.isError}
-        isLoading={eventPagesQ.isLoading}
-        onEventSelect={event => {
-          setWaveFilter('all');
-          setStageFilter('all');
-          setCategoryFilter('all');
-          setStatusFilter('all');
-          setSelectedEvent(event);
-        }}
-      />
+      <details className="group rounded-[20px] border border-[#E6E4DE] bg-white p-4 sm:p-5">
+        <summary className="min-h-11 cursor-pointer content-center text-sm font-semibold text-[#3D3B4F]">
+          Tracking diagnostics · signals, journey stages and page coverage
+        </summary>
+        <div className="mt-4 space-y-4">
+          <NewTrackingWavesPanel
+            rows={rows}
+            waves={waves}
+            catalogTotal={stats.total}
+            onOpenPaths={onOpenPaths}
+            onWaveFilter={wave => {
+              setWaveFilter(wave);
+              setStatusFilter(wave === 'all' ? 'all' : 'missing');
+            }}
+          />
+          <JourneyStageCoverage
+            rows={rows}
+            onStageFilter={stage => {
+              setStageFilter(stage);
+              setStatusFilter('all');
+            }}
+          />
+          <PageEventCoveragePanel
+            rows={rows}
+            eventPages={eventPages}
+            isError={eventPagesQ.isError}
+            isLoading={eventPagesQ.isLoading}
+            onEventSelect={event => {
+              setWaveFilter('all');
+              setStageFilter('all');
+              setCategoryFilter('all');
+              setStatusFilter('all');
+              setSelectedEvent(event);
+            }}
+          />
+        </div>
+      </details>
       <div className="rounded-[20px] bg-white p-6 shadow-float">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h3 className="text-[15px] font-bold text-[#3D3B4F]">Event Coverage</h3>
+            <h3 className="text-[15px] font-bold text-[#3D3B4F]">Observed event coverage</h3>
             <p className="mt-0.5 text-[12px] text-[#9B9590]">
               Catalog {stats.total} · received {stats.received} · no data yet {stats.missing}
+            </p>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">
+              Selected period and filters only. An event with no data may simply not have been
+              triggered; this is not an implementation pass/fail score.
             </p>
           </div>
           <div className="text-right">
@@ -661,12 +703,19 @@ function EventsView({
         </div>
       </div>
 
-      <EventCoverageMatrix
-        categories={categories}
-        rows={filteredEvents}
-        catalogTotal={stats.total}
-        onSelect={event => setSelectedEvent(event)}
-      />
+      <details className="rounded-[20px] border border-[#E6E4DE] bg-white p-4 sm:p-5">
+        <summary className="min-h-11 cursor-pointer content-center text-sm font-semibold">
+          Explore the event coverage matrix
+        </summary>
+        <div className="mt-4">
+          <EventCoverageMatrix
+            categories={categories}
+            rows={filteredEvents}
+            catalogTotal={stats.total}
+            onSelect={event => setSelectedEvent(event)}
+          />
+        </div>
+      </details>
 
       <div className="rounded-[20px] bg-white p-6 shadow-float">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -1601,9 +1650,9 @@ function PathsView({
                 <button
                   key={session.sessionId}
                   onClick={() => setSelectedSession(session)}
-                  className="group flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left transition-colors hover:bg-[#F9F8F6]"
+                  className="group flex w-full flex-col items-start gap-2 rounded-xl px-3 py-3 text-left transition-colors hover:bg-[#F9F8F6] sm:flex-row sm:items-center sm:gap-4"
                 >
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 w-full flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-[13px] font-medium text-[#3D3B4F]">
                         {session.entryPath || '/'}
@@ -1619,7 +1668,7 @@ function PathsView({
                     </div>
                     <SessionMeta session={session} />
                   </div>
-                  <div className="flex shrink-0 items-center gap-4 text-[12px] text-[#9B9590]">
+                  <div className="flex shrink-0 flex-wrap items-center gap-3 text-[12px] text-[#9B9590]">
                     <span className="text-[11px]">{formatDate(session.startedAt)}</span>
                     <span className="tabular-nums">
                       {session.pageviews} views · {session.events} events
@@ -1691,7 +1740,7 @@ export function EventsPathsExplorer({
   const filterKey = JSON.stringify(filters);
 
   return (
-    <div className="space-y-6">
+    <section aria-label="Journey tracking" className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-[17px] font-bold tracking-[-0.01em] text-[#3D3B4F]">
           Journey Tracking
@@ -1703,9 +1752,11 @@ export function EventsPathsExplorer({
           ].map(option => (
             <button
               key={option.key}
+              type="button"
+              aria-pressed={view === option.key}
               onClick={() => setView(option.key as ExplorerView)}
               className={cn(
-                'flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12px] font-medium transition-all cursor-pointer',
+                'flex min-h-11 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2',
                 view === option.key
                   ? 'bg-[#3D3B4F] text-white font-semibold'
                   : 'text-[#9B9590] hover:text-[#6b6560]'
@@ -1719,6 +1770,7 @@ export function EventsPathsExplorer({
       </div>
       {view === 'events' ? (
         <EventsView
+          key={`${siteId}:${period}:${filterKey}`}
           siteId={siteId}
           period={period}
           filters={filters}
@@ -1726,8 +1778,14 @@ export function EventsPathsExplorer({
           onOpenPaths={() => setView('paths')}
         />
       ) : (
-        <PathsView siteId={siteId} period={period} filters={filters} filterKey={filterKey} />
+        <PathsView
+          key={`${siteId}:${period}:${filterKey}`}
+          siteId={siteId}
+          period={period}
+          filters={filters}
+          filterKey={filterKey}
+        />
       )}
-    </div>
+    </section>
   );
 }

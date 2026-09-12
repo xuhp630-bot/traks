@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   ExternalLink,
   Mail,
+  Menu,
 } from 'lucide-react';
 import { authClient } from '@/lib/auth-client';
 import { destroyUrl, updateUrl, useInstanceConfig, useLatestVersion } from '@/lib/config';
@@ -90,6 +91,7 @@ function PortalLayout(): React.ReactNode {
  */
 function PortalHeader(): React.ReactNode {
   const { current } = useWorkspace();
+  const [navigationOpen, setNavigationOpen] = useState(false);
 
   return (
     // One-line chrome: identity, navigation, and account share a single row -
@@ -105,8 +107,10 @@ function PortalHeader(): React.ReactNode {
           </Link>
           <BreadcrumbSlash />
           <WorkspaceSwitcher />
-          <BreadcrumbSlash />
-          <nav className="flex h-full items-center gap-0.5">
+          <div className="hidden md:block">
+            <BreadcrumbSlash />
+          </div>
+          <nav className="hidden h-full items-center gap-0.5 md:flex" aria-label="Main navigation">
             <HeaderTab to="/portal/sites" alsoMatchPaths={['/portal/site/']}>
               Sites
             </HeaderTab>
@@ -118,6 +122,35 @@ function PortalHeader(): React.ReactNode {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <VersionPill />
+          <div className="md:hidden">
+            <DropdownMenu open={navigationOpen} onOpenChange={setNavigationOpen}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Open navigation"
+                  aria-expanded={navigationOpen}
+                  className="flex h-11 w-11 items-center justify-center rounded-full text-[#3D3B4F] hover:bg-muted md:hidden"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48 rounded-2xl bg-white shadow-float">
+                {[
+                  { to: '/portal/sites', label: 'Sites' },
+                  { to: '/portal/skill', label: 'Skill' },
+                  { to: '/portal/mcp', label: 'MCP server' },
+                  ...(current?.role === 'owner'
+                    ? [{ to: '/portal/members', label: 'Members' }]
+                    : []),
+                  { to: '/portal/settings', label: 'Settings' },
+                ].map(item => (
+                  <DropdownMenuItem key={item.to} asChild className="min-h-11 px-4 text-sm">
+                    <Link to={item.to}>{item.label}</Link>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <UserMenu />
         </div>
       </div>

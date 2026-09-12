@@ -545,6 +545,8 @@ function MetricTile({
 
   return (
     <button
+      type="button"
+      aria-pressed={onClick ? Boolean(active) : undefined}
       onClick={onClick}
       disabled={!onClick}
       className={cn(
@@ -616,7 +618,35 @@ function ChartCard({
     stats && stats.sessions > 0 ? (stats.pageviews / stats.sessions).toFixed(2) : '0';
 
   return (
-    <div className="overflow-hidden rounded-[20px] bg-white shadow-float">
+    <section
+      aria-label="Traffic overview"
+      className="overflow-hidden rounded-[20px] bg-white shadow-float"
+    >
+      <div className="border-b border-[#F3F0EA] px-4 pb-3 pt-5 sm:px-6">
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-bold tracking-tight text-[#3D3B4F]">Traffic trends</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {metric === 'visitors'
+                ? 'Unique visitors'
+                : metric === 'pageviews'
+                  ? 'Total pageviews'
+                  : 'Visits'}
+              {' · Select a metric below to compare activity'}
+            </p>
+          </div>
+          <span className="rounded-full bg-muted px-3 py-1 text-xs font-medium text-[#6E6C7C]">
+            {PERIOD_LABELS[period] ?? period}
+          </span>
+        </div>
+        <TimeseriesChart
+          data={timeseries}
+          isLoading={timeseriesLoading}
+          isError={timeseriesError}
+          metric={metric}
+          bare
+        />
+      </div>
       {/* KPI columns */}
       {statsError ? (
         <p className="border-b border-[#F3F0EA] px-6 py-5 text-[13px] text-[#e07a5f]">
@@ -671,28 +701,7 @@ function ChartCard({
           />
         </div>
       )}
-
-      {/* Chart */}
-      <div className="px-6 pb-4 pt-5">
-        <div className="mb-3.5 flex items-baseline justify-between">
-          <h3 className="text-[15px] font-bold tracking-[-0.01em] text-[#3D3B4F]">
-            {metric === 'visitors'
-              ? 'Unique Visitors'
-              : metric === 'pageviews'
-                ? 'Total Pageviews'
-                : 'Visits'}
-          </h3>
-          <span className="text-[12px] text-[#B5B0AA]">{PERIOD_LABELS[period] ?? period}</span>
-        </div>
-        <TimeseriesChart
-          data={timeseries}
-          isLoading={timeseriesLoading}
-          isError={timeseriesError}
-          metric={metric}
-          bare
-        />
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -1502,7 +1511,7 @@ function SiteAnalyticsPage(): ReactElement {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             {/* Actions fused into one segmented cluster; Delete lives in the
                 overflow so it never sits one slip away from Refresh. */}
             <div className="flex items-center gap-0.5 rounded-full border border-[#E6E4DE] bg-white p-0.5">
@@ -1577,10 +1586,6 @@ function SiteAnalyticsPage(): ReactElement {
           className={`space-y-6 transition-opacity duration-300 ${switching ? 'opacity-50' : ''}`}
           aria-busy={switching}
         >
-          {/* Tracking health stays above the fold so newly shipped events and
-              path coverage are visible without hunting through goal panels. */}
-          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
-
           {/* Main chart card: metric tiles + timeseries */}
           <ChartCard
             stats={(mainQ.data as any)?.data}
@@ -1593,6 +1598,8 @@ function SiteAnalyticsPage(): ReactElement {
             onMetricChange={setChartMetric}
             period={period}
           />
+
+          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
 
           {/* Pages + Sources */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
