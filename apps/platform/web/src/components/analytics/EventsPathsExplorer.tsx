@@ -112,7 +112,8 @@ interface PathFlowRow {
 
 type ExplorerView = 'events' | 'paths';
 
-const WAVE_ORDER = ['Commerce and forms', 'Controls and errors'];
+const GRANULAR_ENGAGEMENT_WAVE = 'Granular engagement';
+const WAVE_ORDER = [GRANULAR_ENGAGEMENT_WAVE, 'Commerce and forms', 'Controls and errors'];
 const STAGE_ORDER = ['Arrival', 'Discovery', 'Engagement', 'Intent', 'Conversion', 'Retention'];
 
 function formatTime(ms: number): string {
@@ -338,9 +339,14 @@ function EventsView({
   );
   const waves = useMemo(
     () =>
-      Array.from(new Set(rows.map(row => row.wave))).sort(
-        (a, b) => WAVE_ORDER.indexOf(a) - WAVE_ORDER.indexOf(b) || a.localeCompare(b)
-      ),
+      Array.from(new Set(rows.map(row => row.wave))).sort((a, b) => {
+        const aIndex = WAVE_ORDER.indexOf(a);
+        const bIndex = WAVE_ORDER.indexOf(b);
+        return (
+          (aIndex === -1 ? WAVE_ORDER.length : aIndex) -
+            (bIndex === -1 ? WAVE_ORDER.length : bIndex) || a.localeCompare(b)
+        );
+      }),
     [rows]
   );
   const stages = useMemo(
@@ -1093,6 +1099,11 @@ function NewTrackingWavesPanel({
                 <div className="flex min-w-0 items-center gap-2">
                   <Layers className="h-3.5 w-3.5 shrink-0 text-[#4338CA]" />
                   <h4 className="truncate text-[13px] font-semibold text-[#3D3B4F]">{wave}</h4>
+                  {wave === GRANULAR_ENGAGEMENT_WAVE && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#4338CA] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                      <Sparkles className="h-2.5 w-2.5" /> Latest
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => onWaveFilter(wave)}
