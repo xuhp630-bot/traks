@@ -244,6 +244,59 @@ export const createGoalSchema = z
   })
   .superRefine(refineTargetAndProp);
 
+/** A custom event expected by the production tracking plan. */
+export const eventCatalogItemSchema = z.object({
+  eventName: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_.]+$/, 'Event names can use letters, numbers, underscores and periods')
+    .min(1)
+    .max(256),
+  category: trimmedText(64, 'Event category'),
+  description: z.string().trim().max(512).optional(),
+  sourcePath: z.string().trim().max(2048).optional(),
+  aliases: z.array(z.string().trim().min(1).max(256)).max(50).default([]),
+  wave: trimmedText(80, 'Tracking wave').optional(),
+  journeyStage: trimmedText(80, 'Journey stage').optional(),
+});
+
+/** Replace a site's complete event catalog (an empty list clears it). */
+export const replaceEventCatalogSchema = z
+  .object({
+    events: z.array(eventCatalogItemSchema).max(1000),
+  })
+  .superRefine((value, ctx) => {
+    const canonicalNames = new Set<string>();
+    for (const item of value.events) {
+      if (canonicalNames.has(item.eventName)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['events'],
+          message: `Duplicate event: ${item.eventName}`,
+        });
+      }
+      canonicalNames.add(item.eventName);
+    }
+
+    const aliasOwners = new Map<string, string>();
+    for (const item of value.events) {
+      const aliases = new Set<string>();
+      for (const alias of item.aliases) {
+        if (alias === item.eventName || aliases.has(alias)) continue;
+        if (canonicalNames.has(alias) || aliasOwners.has(alias)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['events'],
+            message: `Alias ${alias} must map to only one catalog event`,
+          });
+          continue;
+        }
+        aliases.add(alias);
+        aliasOwners.set(alias, item.eventName);
+      }
+    }
+  });
+
 /** Saved filter set: at least one known filter dimension, unknown keys stripped. */
 export const segmentFiltersSchema = z
   .object({

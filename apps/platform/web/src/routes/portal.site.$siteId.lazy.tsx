@@ -1590,6 +1590,10 @@ function SiteAnalyticsPage(): ReactElement {
             period={period}
           />
 
+          {/* Tracking health stays above the fold so newly shipped events and
+              path coverage are visible without hunting through goal panels. */}
+          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
+
           {/* Pages + Sources */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <PanelCard
@@ -1720,10 +1724,8 @@ function SiteAnalyticsPage(): ReactElement {
                 />
               </div>
 
-              {/* Goal conversions, custom events, and auto-tracked links,
-                each a full-width tile: events are business actions with a
-                props drill-down; outbound/downloads share one card as tabs
-                since they're the same shape (URL + clicks). */}
+              {/* Goal conversions and auto-tracked links. Event coverage and
+                  user paths render above so tracking health is immediately visible. */}
               <GoalsPanel
                 goals={(goalStatsQ.data as any)?.data}
                 isLoading={goalStatsQ.isLoading}
@@ -1731,7 +1733,6 @@ function SiteAnalyticsPage(): ReactElement {
                 onAdd={canManage ? () => setGoalForm({ goal: null }) : undefined}
                 onManage={canManage ? () => setGoalsOpen(true) : undefined}
               />
-              <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
               <PanelCard
                 title="Links"
                 labelHeader="URL"

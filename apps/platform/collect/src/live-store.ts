@@ -17,6 +17,7 @@ import type {
   LiveRealtime,
   LiveBotRow,
   LiveCustomEventRow,
+  LiveEventPageRow,
   LiveWebmcpMetaRow,
   LiveLinkRow,
   LiveEntryPageRow,
@@ -24,6 +25,7 @@ import type {
   LiveMetaRow,
   LiveSessionSummary,
   LiveJourneyStep,
+  LivePathFlowRow,
 } from '@traks/shared';
 import {
   AUTO_EVENTS,
@@ -1085,6 +1087,41 @@ export class SiteLiveStore extends DurableObject<unknown> {
     );
   }
 
+  async eventPages(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveEventPageRow[]> {
+    const boundedLimit = Math.max(1, Math.min(1000, limit));
+    const f = SiteLiveStore.filterSql(filters);
+    return this.memoized(
+      `eventPages:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
+      MEMO_TTL_MS,
+      () =>
+        this.sql
+          .exec(
+            `SELECT event_name AS name, pathname, COUNT(*) AS count, SUM(event_value) AS totalValue
+             FROM events
+             WHERE event_type = 'event' AND event_name != '' AND pathname != '' AND ts >= ? AND ts < ?${f.sql}
+             GROUP BY event_name, pathname
+             ORDER BY count DESC
+             LIMIT ?`,
+            fromMs,
+            toMs,
+            ...f.params,
+            boundedLimit
+          )
+          .toArray()
+          .map(r => ({
+            name: String(r.name),
+            pathname: String(r.pathname),
+            count: n(r.count),
+            totalValue: n(r.totalValue),
+          }))
+    );
+  }
+
   async webmcpMeta(
     fromMs: number,
     toMs: number,
@@ -1379,6 +1416,66 @@ export class SiteLiveStore extends DurableObject<unknown> {
             utmSource: String(r.utmSource),
             utmMedium: String(r.utmMedium),
             utmCampaign: String(r.utmCampaign),
+          }))
+    );
+  }
+
+  async pathFlows(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LivePathFlowRow[]> {
+    const boundedLimit = Math.max(1, Math.min(100, limit));
+    const f = SiteLiveStore.filterSql(filters);
+    return this.memoized(
+      `pathFlows:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
+      MEMO_TTL_MS,
+      () =>
+        this.sql
+          .exec(
+            `WITH ordered AS (
+               SELECT session_id,
+                      pathname AS from_path,
+                      LEAD(pathname) OVER (PARTITION BY session_id ORDER BY ts ASC) AS to_path,
+                      LEAD(pathname, 2) OVER (PARTITION BY session_id ORDER BY ts ASC) AS third_path,
+                      ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts ASC) AS rn
+               FROM events
+               WHERE event_type = 'pageview' AND session_id != ''
+                 AND ts >= ? AND ts < ?${f.sql}
+             ),
+             flows AS (
+               SELECT 'entry' AS kind, from_path, '' AS to_path, '' AS third_path, session_id
+               FROM ordered WHERE rn = 1
+               UNION ALL
+               SELECT 'transition' AS kind, from_path, to_path, '' AS third_path, session_id
+               FROM ordered WHERE to_path IS NOT NULL
+               UNION ALL
+               SELECT 'sequence' AS kind, from_path, to_path, third_path, session_id
+               FROM ordered WHERE third_path IS NOT NULL
+             ),
+             ranked AS (
+               SELECT kind, from_path, to_path, third_path,
+                      COUNT(DISTINCT session_id) AS sessions
+               FROM flows
+               GROUP BY kind, from_path, to_path, third_path
+             )
+             SELECT kind, from_path, to_path, third_path, sessions
+             FROM ranked
+             ORDER BY sessions DESC, kind ASC, from_path ASC, to_path ASC, third_path ASC
+             LIMIT ?`,
+            fromMs,
+            toMs,
+            ...f.params,
+            boundedLimit * 3
+          )
+          .toArray()
+          .map(r => ({
+            kind: String(r.kind) as LivePathFlowRow['kind'],
+            fromPath: String(r.from_path),
+            toPath: String(r.to_path),
+            thirdPath: String(r.third_path),
+            sessions: n(r.sessions),
           }))
     );
   }

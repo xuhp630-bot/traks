@@ -287,3 +287,35 @@ export const funnels = sqliteTable(
   },
   table => [index('funnels_site_id_idx').on(table.siteId)]
 );
+
+// ============ Event catalogs (tracking plan: expected custom events) ============
+export const eventCatalogs = sqliteTable(
+  'event_catalogs',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    siteId: text('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    eventName: text('event_name').notNull(),
+    category: text('category').notNull(),
+    description: text('description'),
+    sourcePath: text('source_path'),
+    aliases: text('aliases', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    /** Tracking-wave metadata supplied by the site's generated catalog. */
+    wave: text('wave'),
+    /** Position in the monitored visitor journey (arrival, discovery, ...). */
+    journeyStage: text('journey_stage'),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .$defaultFn(() => new Date())
+      .notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .$defaultFn(() => new Date())
+      .notNull(),
+  },
+  table => [
+    uniqueIndex('event_catalogs_site_event_idx').on(table.siteId, table.eventName),
+    index('event_catalogs_site_id_idx').on(table.siteId),
+  ]
+);

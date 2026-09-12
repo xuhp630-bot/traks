@@ -123,6 +123,20 @@ function LoginPage(): ReactElement {
           claimToken: claimCode.trim(),
         } as Parameters<typeof authClient.signUp.email>[0])
       : await authClient.signIn.email({ email, password });
+    if (result.error) {
+      // Browser password managers / extensions can inject headers after the
+      // native fetch call and turn a committed sign-up into a parser error.
+      // The session cookie is authoritative: if it exists, continue into the
+      // dashboard instead of asking the owner to register a second time.
+      const response = await fetch('/api/auth/get-session', {
+        headers: { accept: 'application/json' },
+      });
+      const session = response.ok ? ((await response.json()) as { user?: unknown }) : null;
+      if (session?.user) {
+        navigate({ to: '/portal/sites' });
+        return;
+      }
+    }
     setSubmitting(false);
     if (result.error) {
       setError(result.error.message || 'Something went wrong');

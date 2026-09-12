@@ -234,6 +234,33 @@ export const api = {
     return res.json();
   },
 
+  // Event catalog (expected events from the production tracking plan)
+  async getEventCatalog(siteId: string): Promise<any> {
+    const res = await client.api.sites[':id']['event-catalog'].$get({ param: { id: siteId } });
+    await assertOk(res);
+    return res.json();
+  },
+
+  async replaceEventCatalog(
+    siteId: string,
+    data: {
+      events: {
+        eventName: string;
+        category: string;
+        aliases?: string[];
+        wave?: string;
+        journeyStage?: string;
+      }[];
+    }
+  ): Promise<any> {
+    const res = await client.api.sites[':id']['event-catalog'].$put({
+      param: { id: siteId },
+      json: data,
+    });
+    await assertOk(res);
+    return res.json();
+  },
+
   // Goals
   async getGoals(siteId: string): Promise<any> {
     const res = await client.api.sites[':id'].goals.$get({ param: { id: siteId } });
@@ -532,8 +559,26 @@ export const api = {
     return res.json();
   },
 
+  async getPathFlows(siteId: string, period: Period, filters?: AnalyticsFilters): Promise<any> {
+    const res = await client.api.analytics[':siteId'].stats['path-flows'].$get({
+      param: { siteId },
+      query: { period, ...filters },
+    });
+    await assertOk(res);
+    return res.json();
+  },
+
   async getEvents(siteId: string, period: Period, filters?: AnalyticsFilters): Promise<any> {
     const res = await client.api.analytics[':siteId'].stats.events.$get({
+      param: { siteId },
+      query: { period, ...filters },
+    });
+    await assertOk(res);
+    return res.json();
+  },
+
+  async getEventPages(siteId: string, period: Period, filters?: AnalyticsFilters): Promise<any> {
+    const res = await client.api.analytics[':siteId'].stats['event-pages'].$get({
       param: { siteId },
       query: { period, ...filters },
     });

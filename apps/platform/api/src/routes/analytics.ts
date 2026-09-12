@@ -48,6 +48,7 @@ import {
   buildRealtimeQuery,
   buildBotsQuery,
   buildEventsQuery,
+  buildEventPagesQuery,
   buildWebmcpQuery,
   buildEngagementStatsQuery,
   buildGoalEventsQuery,
@@ -56,6 +57,7 @@ import {
   buildGoalPagePrefixQuery,
   buildSpecialGoalsQuery,
   buildSessionsQuery,
+  buildPathFlowsQuery,
   buildSessionJourneyQuery,
   isPagePrefix,
   buildFunnelQuery,
@@ -1869,6 +1871,52 @@ export const analyticsRoute = appWithBatch
     });
   })
 
+  .get('/:siteId/stats/event-pages', requireAuth, validate('query', periodQuery), async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('siteId');
+    const query = c.req.valid('query');
+    const { period } = query;
+    const filters = parseFilters(query);
+
+    const site = await getSite(c, siteId, userId);
+    if (!site) return c.json({ error: 'Not found' }, 404);
+
+    if (period === 'today') {
+      try {
+        const range = resolvePeriod('today', new Date(), site.timezone);
+        const rows = await liveStore(c, site.siteId).eventPages(
+          ms(range.from),
+          ms(range.to),
+          1000,
+          filters
+        );
+        return c.json({ data: rows });
+      } catch (err) {
+        logLiveFallback(err);
+      }
+    }
+
+    const range = resolvePeriod(period, queryTime(period), site.timezone);
+    const ttl = freshTtlSeconds(period, range);
+    const outcome = await runQueries(c, () =>
+      cachedR2Sql<{ name: string; pathname: string; count: unknown; total_value: unknown }>(
+        c,
+        ttl,
+        buildEventPagesQuery(site.siteId, range, filters, 1000)
+      )
+    );
+    if (outcome instanceof Response) return outcome;
+
+    return c.json({
+      data: outcome.map(r => ({
+        name: r.name,
+        pathname: r.pathname,
+        count: toNumber(r.count),
+        totalValue: toNumber(r.total_value),
+      })),
+    });
+  })
+
   .get('/:siteId/stats/webmcp', requireAuth, validate('query', periodQuery), async c => {
     const userId = c.get('userId')!;
     const siteId = c.req.param('siteId');
@@ -2065,6 +2113,73 @@ export const analyticsRoute = appWithBatch
         utmCampaign: String(r.utm_campaign ?? ''),
       })),
     });
+  })
+
+  .get('/:siteId/stats/path-flows', requireAuth, validate('query', periodQuery), async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('siteId');
+    const query = c.req.valid('query');
+    const { period } = query;
+    const filters = parseFilters(query);
+
+    const site = await getSite(c, siteId, userId);
+    if (!site) return c.json({ error: 'Not found' }, 404);
+
+    const normalize = (
+      rows: {
+        kind: string;
+        from_path: string;
+        to_path: string;
+        third_path: string;
+        sessions: unknown;
+      }[]
+    ) =>
+      rows.map(row => ({
+        kind: row.kind,
+        fromPath: row.from_path,
+        toPath: row.to_path,
+        thirdPath: row.third_path,
+        sessions: toNumber(row.sessions),
+      }));
+
+    if (period === 'today') {
+      try {
+        const range = resolvePeriod('today', new Date(), site.timezone);
+        const rows = await liveStore(c, site.siteId).pathFlows(
+          ms(range.from),
+          ms(range.to),
+          10,
+          filters
+        );
+        return c.json({
+          data: rows.map(row => ({
+            kind: row.kind,
+            fromPath: row.fromPath,
+            toPath: row.toPath,
+            thirdPath: row.thirdPath,
+            sessions: row.sessions,
+          })),
+        });
+      } catch (err) {
+        logLiveFallback(err);
+      }
+    }
+
+    const range = resolvePeriod(period, queryTime(period), site.timezone);
+    const ttl = freshTtlSeconds(period, range);
+
+    const outcome = await runQueries(c, () =>
+      cachedR2Sql<{
+        kind: string;
+        from_path: string;
+        to_path: string;
+        third_path: string;
+        sessions: unknown;
+      }>(c, ttl, buildPathFlowsQuery(site.siteId, range, filters, 10))
+    );
+    if (outcome instanceof Response) return outcome;
+
+    return c.json({ data: normalize(outcome) });
   })
 
   .get('/:siteId/stats/session-journey', requireAuth, validate('query', sessionQuery), async c => {

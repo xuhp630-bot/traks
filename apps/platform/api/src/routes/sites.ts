@@ -10,9 +10,10 @@ import {
   createGoalSchema,
   createFunnelSchema,
   createSegmentSchema,
+  replaceEventCatalogSchema,
 } from '@traks/shared';
 import { requireAuth } from '../middleware/auth';
-import { sites, apiKeys, goals, funnels, segments, users } from '../db/schema';
+import { sites, apiKeys, goals, funnels, segments, users, eventCatalogs } from '../db/schema';
 import {
   siteAccessFilter,
   siteManageFilter,
@@ -347,6 +348,76 @@ export const sitesRoute = app
 
     await db.delete(goals).where(eq(goals.id, goalId));
     return c.json({ ok: true });
+  })
+
+  // Tracking-plan catalog: every expected custom event, whether or not it has fired yet
+  .get('/:id/event-catalog', requireAuth, async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('id');
+    const db = c.get('db')!;
+
+    if (!(await getAccessibleSite(db, userId, siteId, c.get('tokenWorkspaceId'))))
+      return c.json({ error: 'Not found' }, 404);
+
+    const rows = await db
+      .select({
+        id: eventCatalogs.id,
+        eventName: eventCatalogs.eventName,
+        category: eventCatalogs.category,
+        description: eventCatalogs.description,
+        sourcePath: eventCatalogs.sourcePath,
+        aliases: eventCatalogs.aliases,
+        wave: eventCatalogs.wave,
+        journeyStage: eventCatalogs.journeyStage,
+        createdAt: eventCatalogs.createdAt,
+        updatedAt: eventCatalogs.updatedAt,
+      })
+      .from(eventCatalogs)
+      .where(eq(eventCatalogs.siteId, siteId))
+      .orderBy(eventCatalogs.category, eventCatalogs.eventName);
+
+    return c.json({ data: rows });
+  })
+
+  // Replace the whole catalog. The catalog is generated from source, so a
+  // complete replacement avoids stale rows when production events are renamed.
+  .put('/:id/event-catalog', requireAuth, validate('json', replaceEventCatalogSchema), async c => {
+    const userId = c.get('userId')!;
+    const siteId = c.req.param('id');
+    const { events } = c.req.valid('json');
+    const db = c.get('db')!;
+
+    const manage = await checkManage(db, userId, siteId, 'configure', c.get('tokenWorkspaceId'));
+    if (!manage.ok) return c.json({ error: manage.error }, manage.status);
+
+    const now = new Date();
+    const deleteStatement = db.delete(eventCatalogs).where(eq(eventCatalogs.siteId, siteId));
+    if (events.length === 0) {
+      await db.batch([deleteStatement]);
+      return c.json({ data: { events: 0 } });
+    }
+
+    const rows = events.map(event => ({
+      siteId,
+      eventName: event.eventName,
+      category: event.category,
+      description: event.description || null,
+      sourcePath: event.sourcePath || null,
+      aliases: Array.from(new Set(event.aliases.filter(alias => alias !== event.eventName))),
+      wave: event.wave || null,
+      journeyStage: event.journeyStage || null,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    // D1 caps bound parameters per SQL statement. Catalog replacements can
+    // contain hundreds of events, so write them in fixed-size chunks while
+    // keeping the delete and all inserts in one transactional batch.
+    const insertStatements = Array.from({ length: Math.ceil(rows.length / 10) }, (_, index) =>
+      db.insert(eventCatalogs).values(rows.slice(index * 10, (index + 1) * 10))
+    );
+    await db.batch([deleteStatement, ...insertStatements]);
+
+    return c.json({ data: { events: events.length } });
   })
 
   // List segments for a site

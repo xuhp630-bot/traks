@@ -213,6 +213,14 @@ export interface LiveCustomEventRow {
   totalValue: number;
 }
 
+/** Custom-event volume grouped by the page on which it fired. */
+export interface LiveEventPageRow {
+  name: string;
+  pathname: string;
+  count: number;
+  totalValue: number;
+}
+
 /** WebMCP tool-call group: one canonical '{"tool":...,"status":...}' meta. */
 export interface LiveWebmcpMetaRow {
   meta: string;
@@ -272,6 +280,15 @@ export interface LiveSessionSummary {
   utmSource: string;
   utmMedium: string;
   utmCampaign: string;
+}
+
+/** Aggregated page-path rows for entries, transitions, and sequences. */
+export interface LivePathFlowRow {
+  kind: 'entry' | 'transition' | 'sequence';
+  fromPath: string;
+  toPath: string;
+  thirdPath: string;
+  sessions: number;
 }
 
 /** One ordered row in a session's replayable path timeline. */
@@ -367,6 +384,13 @@ export interface LiveStoreApi {
     limit: number,
     filters?: LiveFilters
   ): Promise<LiveCustomEventRow[]>;
+  /** Custom events grouped by event name and pathname. */
+  eventPages(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LiveEventPageRow[]>;
   /** WebMCP tool calls grouped by canonical meta (tool + status). */
   webmcpMeta(fromMs: number, toMs: number, filters?: LiveFilters): Promise<LiveWebmcpMetaRow[]>;
   /** Bot pageviews grouped by bot name (event_type 'bot_pageview' rows). */
@@ -402,6 +426,13 @@ export interface LiveStoreApi {
     limit: number,
     filters?: LiveFilters
   ): Promise<LiveMetaRow[]>;
+  /** Aggregated page paths: entries, adjacent transitions, and 3-step sequences. */
+  pathFlows(
+    fromMs: number,
+    toMs: number,
+    limit: number,
+    filters?: LiveFilters
+  ): Promise<LivePathFlowRow[]>;
   /** Recent sessions with page/event counts and entry context. */
   sessionSummaries(
     fromMs: number,

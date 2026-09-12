@@ -1317,6 +1317,31 @@ export function buildEventsQuery(
 }
 
 /**
+ * Page-level custom-event volume. This powers page coverage without making
+ * the event-name endpoint return a sparse event x page cross-product.
+ */
+export function buildEventPagesQuery(
+  siteKey: string,
+  range: PeriodRange,
+  filters?: LiveFilters,
+  limit = 1000
+) {
+  return (table: string) => `
+    SELECT
+      event_name AS name,
+      pathname,
+      COUNT(*) AS count,
+      SUM(event_value) AS total_value
+    FROM ${table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+      AND event_name != ''
+    GROUP BY event_name, pathname
+    ORDER BY count DESC
+    LIMIT ${limit}
+  `;
+}
+
+/**
  * Recent sessions with pageview/event counts and entry/exit context. This is
  * the R2 SQL equivalent of the live store's sessionSummaries, so historical
  * periods can power the same user-path explorer as 'today'.
@@ -1391,6 +1416,57 @@ export function buildSessionsQuery(
     LEFT JOIN entry_rows ep ON ep.session_id = s.session_id
     LEFT JOIN exit_rows xp ON xp.session_id = s.session_id
     ORDER BY s.started_at DESC
+  `;
+}
+
+/** Aggregated page paths: entries, adjacent transitions, and 3-step sequences. */
+export interface PathFlowsQueryRow {
+  kind: 'entry' | 'transition' | 'sequence';
+  from_path: string;
+  to_path: string;
+  third_path: string;
+  sessions: unknown;
+}
+
+export function buildPathFlowsQuery(
+  siteKey: string,
+  range: PeriodRange,
+  filters?: LiveFilters,
+  limit = 10
+) {
+  const boundedLimit = Math.max(1, Math.min(100, limit));
+  return (table: string) => `
+    WITH ordered AS (
+      SELECT
+        session_id,
+        pathname AS from_path,
+        LEAD(pathname) OVER (PARTITION BY session_id ORDER BY ts ASC) AS to_path,
+        LEAD(pathname, 2) OVER (PARTITION BY session_id ORDER BY ts ASC) AS third_path,
+        ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts ASC) AS rn
+      FROM ${table}
+      WHERE ${whereSiteAndRange(siteKey, range, 'pageview', filters)}
+        AND session_id != ''
+    ),
+    flows AS (
+      SELECT 'entry' AS kind, from_path, '' AS to_path, '' AS third_path, session_id
+      FROM ordered WHERE rn = 1
+      UNION ALL
+      SELECT 'transition' AS kind, from_path, to_path, '' AS third_path, session_id
+      FROM ordered WHERE to_path IS NOT NULL
+      UNION ALL
+      SELECT 'sequence' AS kind, from_path, to_path, third_path, session_id
+      FROM ordered WHERE third_path IS NOT NULL
+    ),
+    ranked AS (
+      SELECT kind, from_path, to_path, third_path,
+             COUNT(DISTINCT session_id) AS sessions
+      FROM flows
+      GROUP BY kind, from_path, to_path, third_path
+    )
+    SELECT kind, from_path, to_path, third_path, sessions
+    FROM ranked
+    ORDER BY sessions DESC, kind ASC, from_path ASC, to_path ASC, third_path ASC
+    LIMIT ${boundedLimit * 3}
   `;
 }
 
