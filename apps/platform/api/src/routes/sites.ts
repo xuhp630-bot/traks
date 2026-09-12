@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validate } from '../lib/validate';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, getTableColumns } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import {
   createSiteSchema,
@@ -412,8 +412,16 @@ export const sitesRoute = app
     // D1 caps bound parameters per SQL statement. Catalog replacements can
     // contain hundreds of events, so write them in fixed-size chunks while
     // keeping the delete and all inserts in one transactional batch.
-    const insertStatements = Array.from({ length: Math.ceil(rows.length / 10) }, (_, index) =>
-      db.insert(eventCatalogs).values(rows.slice(index * 10, (index + 1) * 10))
+    const rowsPerStatement = Math.max(
+      1,
+      Math.floor(100 / Object.keys(getTableColumns(eventCatalogs)).length)
+    );
+    const insertStatements = Array.from(
+      { length: Math.ceil(rows.length / rowsPerStatement) },
+      (_, index) =>
+        db
+          .insert(eventCatalogs)
+          .values(rows.slice(index * rowsPerStatement, (index + 1) * rowsPerStatement))
     );
     await db.batch([deleteStatement, ...insertStatements]);
 
