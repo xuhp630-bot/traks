@@ -22,6 +22,20 @@ const report = z.object({
   counts,
   deliveryCoverage: z.enum(['configured_not_proof_of_receipt', 'not_configured']),
   automaticCustomerReplies: z.null(),
+  inboundEvidence: z
+    .object({
+      coverage: z.enum(['configured_not_proof_of_receipt', 'not_configured']),
+      counts: z
+        .object({
+          candidateRequests: count,
+          matchedMessages: count,
+          senderMismatchMessages: count,
+        })
+        .nullable(),
+      identityVerified: z.literal(false),
+      autoReplyFiltering: z.literal('not_available_metadata_only'),
+    })
+    .optional(),
   retention: z.object({
     definition: z.literal(
       'verified_account_project_save_on_exact_UTC_day_since_first_retained_save'
@@ -116,7 +130,7 @@ export async function readCrmQuality(
     limitations: [
       'Independent server-side business aggregate, not a join with anonymous Traks sessions or UTM attribution.',
       'Production labels are not proof of humans. QA/internal/unknown are excluded.',
-      'Qualification and customer replies are owner-confirmed; automatic inbound email matching is not connected.',
+      'Qualification and customer replies are owner-confirmed. Optional inbound candidates are metadata-only, not verified humans; automatic replies cannot be excluded and old integrations may not report inbound coverage.',
       'Provider acceptance is not delivery; delivery is not reading, customer reply or a sale.',
       'Retention is verified-account project saves on completed UTC days, not all visitors or contact leads.',
       'The first retained save within rolling 90-day history is not lifetime acquisition. Activity recording is best-effort.',
