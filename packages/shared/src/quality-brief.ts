@@ -129,6 +129,7 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
     population: {
       selectedSessions: report.sessions.length,
       wholeCohortClassification: report.classification,
+      wholeCohortUnknownClassification: report.unknownClassification,
       wholeCohortGroups: scope.totalGroups,
       wholeCohortEvents: scope.totalEvents,
       wholeCohortUnassociatedEvents: report.unassociatedEvents,
