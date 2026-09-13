@@ -14,7 +14,7 @@ Concrete Estimator Hub adds these allowlisted properties to workflow events:
 | ------------------ | ------------------------------------------------------------- |
 | `traffic_type`     | `production`, `qa` or `internal`                              |
 | `tracking_version` | `cw-v3`, the measurement contract                             |
-| `release_version`  | `quality-v1`, an instrumentation release label, not a Git SHA |
+| `release_version`  | `quality-v3`, an instrumentation release label, not a Git SHA |
 | `locale`           | `en`, `es` or `fr`                                            |
 
 Use `?analytics_traffic=qa` or the existing `utm_source=release-qa` for controlled
@@ -44,6 +44,11 @@ evidence), `legacy_custom_unknown` (custom events without a valid version), or
 production/qa/internal label). Pageview-only traffic must not be interpreted as
 verified human visitors or user churn.
 
+Diagnostic reasons are monotonic: versioned missing-context evidence takes
+precedence over legacy custom events regardless of arrival order. A later legacy
+event cannot erase the diagnostic. Explicit QA/internal promotion still applies
+to the whole observed session; this does not reclassify unknown history as users.
+
 ## Complete reads and session export
 
 `GET /api/analytics/:siteId/stats/quality-evidence?period=…&cursor=…` uses the existing
@@ -57,6 +62,11 @@ a page filter cannot hide that session's QA marker on another page.
 - Each request groups identical rows while preserving their multiplicity, orders
   by all grouping columns and returns at most 500 groups. Window totals are
   calculated before pagination. There is no 100-session or 500-event export cap.
+- The aggregate endpoint uses internal batches of 5,000 groups to reduce repeated
+  historical SQL round trips. Public evidence pages remain 500. Both scans retain
+  duplicate multiplicity and fixed bounds; aggregate scans reject changed totals,
+  invalid order, missing advancement and mismatched final event counts. Very large
+  windows can still time out; use complete cursor paging, not partial insights.
 - Cursors bind site, timezone, period, filters and fixed window bounds. They
   expire after 30 minutes. The current edge is delayed by five seconds (live) or
   90 seconds (historical). Late pipeline ingestion can invalidate a historical
@@ -224,3 +234,39 @@ Mocks prove local behavior, not production data collection or R2 SQL dialect
 compatibility. A subsequent authorized release must verify the versioned site
 events, source reads and complete export against the actual production receiver.
 No database migrations are required.
+
+## Acquisition and request-only reply measurement
+
+The aggregate JSON adds `acquisition` and `growthCoverage`. Each selected collector
+session is assigned once to its first observed native pageview in this window:
+safe UTM source/medium/campaign (referrer hostname when source is absent), entry
+path, locale and device. No observed pageview means unknown attribution. Labels
+reject emails, URLs, free text and long numeric/hex identifiers; campaigns must
+use non-personal short slugs. This is not multi-touch or cross-day attribution.
+
+Each signal is session-deduplicated: tool success, result use, contact start,
+submit, failure, accepted request and accepted-with-reply-permission. These are
+co-occurring signals, not a required ordered funnel or qualified leads. Versions
+are listed per group; compare compatible releases. Earlier failure remains after
+success, late QA/internal removes the entire session from production, and an old
+`form_success` alone is explicitly unconfirmed. Do not infer missing signals as
+zero business outcomes or add overlapping signals together.
+
+`concrete_workflow_lead_request_accepted` requires contact form context,
+`lead_confirmation=email_provider_accepted` and
+`lead_observation=browser_response`. It observes the response to the existing
+server email operation, not an independently verified server event or confirmed
+delivery. `reply_permission=granted` applies only to that request. It is optional,
+off by default, preserved in the support email with server time, and is never
+marketing subscription consent. The event contains no name, email or message.
+
+`growthCoverage` leaves qualified leads, delivered followups, customer replies
+and cross-day retention as **null**, with `crmConnected=false`. CRM, delivery
+webhooks, actual follow-up, opt-out handling and customer response telemetry need
+a separately selected/authorized business integration. MCP is read-only and does
+not send messages, collect contact lists or create consent.
+
+`TRAKS_UPDATE_ONLY=1` now requires existing Workers, D1, KV and required secrets,
+reads the migration ledger and stops if any migration is pending. It never
+applies a migration, creates those resources or writes secrets/claim tokens.
+Worker/assets uploads and the existing minute prewarm cron remain release writes.

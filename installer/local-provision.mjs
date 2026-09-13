@@ -65,9 +65,7 @@ function getWranglerOAuthToken() {
 }
 
 const API_TOKEN =
-  process.env.CLOUDFLARE_API_TOKEN ||
-  process.env.CLOUDFLARE_OAUTH_TOKEN ||
-  getWranglerOAuthToken();
+  process.env.CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_OAUTH_TOKEN || getWranglerOAuthToken();
 
 if (!ACCOUNT_ID || !API_TOKEN || (!UPDATE_ONLY && !CATALOG_TOKEN)) {
   console.error(
@@ -133,6 +131,7 @@ async function ensureD1() {
   const list = await cf('GET', `/accounts/${ACCOUNT_ID}/d1/database?name=${N.d1}&per_page=100`);
   const existing = (Array.isArray(list) ? list : []).find(item => item.name === N.d1);
   if (existing) return existing.uuid;
+  if (UPDATE_ONLY) throw new Error(`Update-only requires existing D1: ${N.d1}`);
   const created = await cf('POST', `/accounts/${ACCOUNT_ID}/d1/database`, { name: N.d1 });
   return created.uuid;
 }
@@ -150,14 +149,21 @@ async function applyMigrations(d1Id) {
     }
   };
 
-  await query(
-    'CREATE TABLE IF NOT EXISTS d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP NOT NULL DEFAULT current_timestamp);'
-  );
+  if (!UPDATE_ONLY)
+    await query(
+      'CREATE TABLE IF NOT EXISTS d1_migrations(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP NOT NULL DEFAULT current_timestamp);'
+    );
   const applied = await query('SELECT name FROM d1_migrations;');
   const names = new Set((applied?.[0]?.results || []).map(row => row.name));
   const files = readdirSync(path.join(DIST, 'migrations'))
     .filter(file => file.endsWith('.sql'))
     .sort();
+  if (UPDATE_ONLY) {
+    const pending = files.filter(file => !names.has(file));
+    if (pending.length)
+      throw new Error(`Update-only cannot apply migrations: ${pending.join(', ')}`);
+    return;
+  }
   for (const file of files) {
     if (names.has(file)) continue;
     const sql = readFileSync(path.join(DIST, 'migrations', file), 'utf8');
@@ -181,6 +187,7 @@ async function ensureKv() {
     if (existing) return existing.id;
     if (!list || list.length < 100) break;
   }
+  if (UPDATE_ONLY) throw new Error(`Update-only requires existing KV: ${N.kvTitle}`);
   const created = await cf('POST', `/accounts/${ACCOUNT_ID}/storage/kv/namespaces`, {
     title: N.kvTitle,
   });
@@ -198,22 +205,16 @@ async function ensureBucketAndCatalog() {
     { token: CATALOG_TOKEN },
     { tolerate: [10001, 10021, 40010, 7000, 7003] }
   ).catch(() => undefined);
-  await cf(
-    'POST',
-    `/accounts/${ACCOUNT_ID}/r2-catalog/${N.bucket}/maintenance-configs`,
-    { compaction: { state: 'enabled', targetSizeMb: 128 } }
-  ).catch(() => undefined);
-  await cf(
-    'POST',
-    `/accounts/${ACCOUNT_ID}/r2-catalog/${N.bucket}/maintenance-configs`,
-    {
-      snapshot_expiration: {
-        state: 'enabled',
-        max_snapshot_age: '30d',
-        min_snapshots_to_keep: 5,
-      },
-    }
-  ).catch(() => undefined);
+  await cf('POST', `/accounts/${ACCOUNT_ID}/r2-catalog/${N.bucket}/maintenance-configs`, {
+    compaction: { state: 'enabled', targetSizeMb: 128 },
+  }).catch(() => undefined);
+  await cf('POST', `/accounts/${ACCOUNT_ID}/r2-catalog/${N.bucket}/maintenance-configs`, {
+    snapshot_expiration: {
+      state: 'enabled',
+      max_snapshot_age: '30d',
+      min_snapshots_to_keep: 5,
+    },
+  }).catch(() => undefined);
 }
 
 async function dropCatalogTable() {
@@ -380,7 +381,10 @@ async function hashAsset(asset) {
   const require = createRequire(path.join(ROOT, 'apps/platform/api/package.json'));
   const wranglerPath = require.resolve('wrangler/package.json');
   const blake3 = createRequire(wranglerPath)('blake3-wasm');
-  return blake3.hash(asset.bytes.toString('base64') + asset.extension).toString('hex').slice(0, 32);
+  return blake3
+    .hash(asset.bytes.toString('base64') + asset.extension)
+    .toString('hex')
+    .slice(0, 32);
 }
 
 async function prepareAssets() {
@@ -446,10 +450,7 @@ async function uploadAssets(assets) {
 
 async function existingSecrets(worker) {
   try {
-    const list = await cf(
-      'GET',
-      `/accounts/${ACCOUNT_ID}/workers/scripts/${worker}/secrets`
-    );
+    const list = await cf('GET', `/accounts/${ACCOUNT_ID}/workers/scripts/${worker}/secrets`);
     return new Set((list || []).map(item => item.name));
   } catch {
     return new Set();
@@ -485,6 +486,7 @@ async function smoke(apiUrl, collectUrl) {
 }
 
 async function claimToken(apiUrl) {
+  if (UPDATE_ONLY) return undefined;
   try {
     const response = await fetch(`${apiUrl}/api/claim-status`);
     const data = await response.json();
@@ -522,7 +524,9 @@ async function main() {
   const collectUrl = `https://${N.collectWorker}.${workers}.workers.dev`;
 
   const d1Id = await step('Ensure D1', ensureD1)();
-  await step('Apply migrations', () => applyMigrations(d1Id))();
+  await step(UPDATE_ONLY ? 'Verify existing migrations (read-only)' : 'Apply migrations', () =>
+    applyMigrations(d1Id)
+  )();
   const kvId = await step('Ensure KV cache', ensureKv)();
   let streamId;
   if (UPDATE_ONLY) {
@@ -532,6 +536,19 @@ async function main() {
     streamId = await step('Ensure Pipelines', ensurePipeline)();
   }
   const collectExisted = await workerExists(N.collectWorker);
+  if (UPDATE_ONLY && (!collectExisted || !(await workerExists(N.apiWorker))))
+    throw new Error('Update-only requires both existing Workers');
+  const apiSecrets = await existingSecrets(N.apiWorker);
+  const collectSecrets = await existingSecrets(N.collectWorker);
+  if (UPDATE_ONLY) {
+    const missing = [
+      !apiSecrets.has('BETTER_AUTH_SECRET') && `${N.apiWorker}:BETTER_AUTH_SECRET`,
+      !apiSecrets.has('R2_SQL_TOKEN') && `${N.apiWorker}:R2_SQL_TOKEN`,
+      !collectSecrets.has('VISITOR_HASH_SECRET') && `${N.collectWorker}:VISITOR_HASH_SECRET`,
+    ].filter(Boolean);
+    if (missing.length)
+      throw new Error(`Update-only requires existing secrets: ${missing.join(', ')}`);
+  }
 
   await step('Deploy collect Worker', () =>
     uploadWorker(N.collectWorker, {
@@ -605,20 +622,8 @@ async function main() {
     ])
   )();
 
-  const apiSecrets = await existingSecrets(N.apiWorker);
-  const collectSecrets = await existingSecrets(N.collectWorker);
   await step('Set secrets', async () => {
     if (UPDATE_ONLY) {
-      const missing = [
-        !apiSecrets.has('BETTER_AUTH_SECRET') && `${N.apiWorker}:BETTER_AUTH_SECRET`,
-        !apiSecrets.has('R2_SQL_TOKEN') && `${N.apiWorker}:R2_SQL_TOKEN`,
-        !collectSecrets.has('VISITOR_HASH_SECRET') && `${N.collectWorker}:VISITOR_HASH_SECRET`,
-      ].filter(Boolean);
-      if (missing.length > 0) {
-        throw new Error(
-          `update-only deploy is missing existing secrets: ${missing.join(', ')}. Run the full provisioner with TRAKS_CATALOG_TOKEN.`
-        );
-      }
       return;
     }
     if (!apiSecrets.has('BETTER_AUTH_SECRET')) {

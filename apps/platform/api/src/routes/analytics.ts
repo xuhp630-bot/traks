@@ -20,6 +20,7 @@ import {
   FILTER_PARAM_TO_DIMENSION,
   buildQualityEvidenceQuery,
   EVIDENCE_PAGE_SIZE,
+  INSIGHT_BATCH_SIZE,
   normalizeEvidence,
   QualityAccumulator,
   buildAnalysisPackage,
@@ -2083,7 +2084,9 @@ export const analyticsRoute = appWithBatch
       if (!site) return c.json({ error: 'Not found' }, 404);
       const query = c.req.valid('query');
       const filters = parseFilters(query);
-      const scope = await sha256Hex(JSON.stringify([siteId, query.period, site.timezone, filters]));
+      const scope = await sha256Hex(
+        JSON.stringify(['quality-growth-v1', siteId, query.period, site.timezone, filters])
+      );
       let cursor: z.infer<typeof evidenceCursor> | undefined;
       if (query.cursor) {
         try {
@@ -2204,9 +2207,21 @@ export const analyticsRoute = appWithBatch
       for (;;) {
         let rows: Record<string, unknown>[];
         if (source === 'live') {
-          rows = await liveStore(c, siteId).qualityEvidence(from, to, offset, filters);
+          rows = await liveStore(c, siteId).qualityEvidence(
+            from,
+            to,
+            offset,
+            filters,
+            INSIGHT_BATCH_SIZE
+          );
         } else {
-          const build = buildQualityEvidenceQuery(siteId, range, offset, filters);
+          const build = buildQualityEvidenceQuery(
+            siteId,
+            range,
+            offset,
+            filters,
+            INSIGHT_BATCH_SIZE
+          );
           try {
             rows = (await queryR2SqlWithStats(getQueryConfig(c), build)).rows;
           } catch (error) {
@@ -2232,10 +2247,15 @@ export const analyticsRoute = appWithBatch
         totalGroups = pageTotalGroups;
         totalEvents = pageTotalEvents;
 
-        const data = rows.slice(0, EVIDENCE_PAGE_SIZE).map(normalizeEvidence);
+        const data = rows.slice(0, INSIGHT_BATCH_SIZE).map(normalizeEvidence);
         accumulator.add(data);
         offset += data.length;
-        if (offset >= totalGroups) break;
+        if (offset > totalGroups || (!data.length && offset < totalGroups))
+          throw new Error('Evidence scan did not advance');
+        if (offset === totalGroups) {
+          if (accumulator.events !== totalEvents) throw new Error('Evidence event total mismatch');
+          break;
+        }
       }
     } catch {
       return c.json({ error: 'Quality insight scan failed. Retry to avoid partial data.' }, 502);

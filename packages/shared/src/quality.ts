@@ -1,4 +1,5 @@
 import { ActionAccumulator } from './quality-actions';
+import { GrowthAccumulator } from './quality-growth';
 
 export type TrafficClass = 'production' | 'qa' | 'internal' | 'unknown';
 export type TrafficSelection = TrafficClass | 'all';
@@ -71,6 +72,11 @@ function failureOutcome(reason: FailureReason): FailureOutcome {
 }
 
 export interface EvidenceEvent {
+  channelSource: string;
+  channelMedium: string;
+  channelCampaign: string;
+  leadAccepted: boolean;
+  replyPermission: 'granted' | 'not_granted' | 'unknown';
   sessionId: string;
   pageId: string;
   calculator: string;
@@ -108,6 +114,7 @@ export interface EvidencePage {
 }
 
 export const EVIDENCE_PAGE_SIZE = 500;
+export const INSIGHT_BATCH_SIZE = 5000;
 const EVIDENCE_COLUMNS = [
   'ts',
   'session_id',
@@ -118,10 +125,19 @@ const EVIDENCE_COLUMNS = [
   'device_type',
   'browser',
   'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'referrer_hostname',
 ].join(', ');
 
-export function buildEvidenceSelect(sourceSql: string, offset: number): string {
+export function buildEvidenceSelect(
+  sourceSql: string,
+  offset: number,
+  limit = EVIDENCE_PAGE_SIZE
+): string {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid evidence offset');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > INSIGHT_BATCH_SIZE)
+    throw new Error('Invalid evidence limit');
   return `WITH evidence_source AS (${sourceSql}), evidence_groups AS (
     SELECT ${EVIDENCE_COLUMNS}, COUNT(*) AS event_count
     FROM evidence_source GROUP BY ${EVIDENCE_COLUMNS}
@@ -131,7 +147,7 @@ export function buildEvidenceSelect(sourceSql: string, offset: number): string {
       ROW_NUMBER() OVER (ORDER BY ${EVIDENCE_COLUMNS}) AS evidence_row
     FROM evidence_groups
   ) SELECT * FROM evidence_ranked WHERE evidence_row > ${offset}
-    ORDER BY evidence_row LIMIT ${EVIDENCE_PAGE_SIZE + 1}`;
+    ORDER BY evidence_row LIMIT ${limit + 1}`;
 }
 
 export function qualityPath(value: unknown): string {
@@ -167,6 +183,12 @@ function label(value: unknown, fallback = 'unknown', maxLength = 48): string {
     : fallback;
 }
 
+function channelLabel(value: unknown, fallback: string): string {
+  if (value === '' || value === null || value === undefined) return fallback;
+  if (typeof value !== 'string' || /\d{8,}|^[a-f0-9-]{24,}$/i.test(value)) return 'redacted';
+  return label(value.toLowerCase(), 'redacted');
+}
+
 export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
   let props: Record<string, unknown> = {};
   try {
@@ -193,6 +215,16 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
     ? (props.failure_reason as FailureReason)
     : 'unknown';
   return {
+    channelSource: channelLabel(row.utm_source || row.referrer_hostname, 'direct_or_unattributed'),
+    channelMedium: channelLabel(row.utm_medium, 'unattributed'),
+    channelCampaign: channelLabel(row.utm_campaign, 'unattributed'),
+    leadAccepted:
+      props.lead_confirmation === 'email_provider_accepted' &&
+      props.lead_observation === 'browser_response',
+    replyPermission:
+      props.reply_permission === 'granted' || props.reply_permission === 'not_granted'
+        ? props.reply_permission
+        : 'unknown',
     pageId:
       typeof props.page_id === 'string' && /^p_[a-z0-9]{12,32}$/.test(props.page_id)
         ? props.page_id
@@ -446,6 +478,7 @@ function failureSignal(
 
 export class QualityAccumulator {
   private actions = new ActionAccumulator();
+  private growth = new GrowthAccumulator();
   private sessions = new Map<string, SessionState>();
   private lastTimestamp = -Infinity;
   unassociatedEvents = 0;
@@ -494,7 +527,9 @@ export class QualityAccumulator {
         session.traffic = event.traffic;
       if (session.traffic === 'unknown' && event.eventType !== 'pageview')
         session.unknownReason =
-          event.version === 'unknown' ? 'legacy_custom_unknown' : 'missing_context_unknown';
+          event.version !== 'unknown' || session.unknownReason === 'missing_context_unknown'
+            ? 'missing_context_unknown'
+            : 'legacy_custom_unknown';
       session.lastAt = event.ts;
       if (event.eventType === 'pageview') {
         if (!session.pageviews) session.entryPath = event.path;
@@ -505,6 +540,7 @@ export class QualityAccumulator {
         session.versions.push(event.version);
       const action = event.eventName.replace(/^concrete_workflow_/, '');
       this.actions.add(event, action);
+      this.growth.add(event, action);
       if (action === 'diagnostic_limit_reached') session.diagnosticsLimited = true;
       const failure = failureSignal(event, action);
       if (calculatorPath(event.path) && event.version !== 'unknown') {
@@ -656,6 +692,7 @@ export class QualityAccumulator {
       classification,
       unknownClassification,
       sessions,
+      acquisition: this.growth.report(new Set(sessions.map(session => session.sessionId))),
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),
       funnels: [...funnels.values()],
       issues: [...issues.values()].sort((first, second) => second.sessions - first.sessions),

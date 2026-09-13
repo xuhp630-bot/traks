@@ -50,6 +50,7 @@ export function QualityWorkflow({
   const [operationLimit, setOperationLimit] = useState(12);
   const [behaviorLimit, setBehaviorLimit] = useState(12);
   const [candidateLimit, setCandidateLimit] = useState(6);
+  const [growthLimit, setGrowthLimit] = useState(12);
   return (
     <div className="mt-4 space-y-4">
       <div className="rounded-2xl border border-[#CEDDCF] bg-[#F0F5EF] p-4 sm:p-6">
@@ -96,6 +97,69 @@ export function QualityWorkflow({
           </div>
         ))}
       </dl>
+      <section aria-label="渠道与联系请求">
+        <h4 className="text-sm font-semibold">渠道 → 有效操作 → 联系受理与回复许可</h4>
+        <p className="mt-2 text-xs leading-relaxed text-[#6E6C7C]">
+          首次已观测页面访问归因，按会话去重；不是多触点归因或完整获客漏斗。受理是浏览器观测的服务端响应，
+          不等于送达、合格商机或成交。许可只限本次联系，不是营销订阅。CRM跟进、实际回复和长期留存尚未接通，不填零。
+        </p>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          {report.acquisition.slice(0, growthLimit).map(group => (
+            <article
+              key={JSON.stringify([
+                group.path,
+                group.locale,
+                group.device,
+                group.channelSource,
+                group.channelMedium,
+                group.channelCampaign,
+              ])}
+              className="min-w-0 rounded-2xl border border-[#E6E4DE] p-4 text-xs"
+            >
+              <h5 className="break-words font-semibold">
+                {group.channelSource} / {group.channelMedium} / {group.channelCampaign}
+              </h5>
+              <p className="mt-1 break-all">
+                {group.path} · {group.locale} / {group.device}
+              </p>
+              <p className="mt-1 break-words text-[#6E6C7C]">
+                版本：{group.versions.join(', ') || 'unknown'}
+              </p>
+              <dl className="mt-3 grid grid-cols-2 gap-2 tabular-nums">
+                {Object.entries({
+                  会话: group.sessions,
+                  计算成功: group.toolSuccessSessions,
+                  使用结果: group.resultUseSessions,
+                  联系开始: group.contactStartedSessions,
+                  联系提交: group.contactSubmittedSessions,
+                  失败或校验: group.contactFailedSessions,
+                  已观测受理: group.acceptedRequestSessions,
+                  受理且允许回复: group.replyAuthorizedSessions,
+                  旧成功未确认: group.unconfirmedContactSessions,
+                }).map(([label, count]) => (
+                  <div key={label}>
+                    <dt className="text-[#6E6C7C]">{label}</dt>
+                    <dd className="font-semibold">{count}</dd>
+                  </div>
+                ))}
+              </dl>
+            </article>
+          ))}
+        </div>
+        {growthLimit < report.acquisition.length && (
+          <button
+            className="mt-3 min-h-11 rounded-xl border border-[#E6E4DE] px-4 text-sm"
+            onClick={() => setGrowthLimit(limit => limit + 12)}
+          >
+            显示更多渠道分组
+          </button>
+        )}
+        {!report.acquisition.length && (
+          <p className="mt-3 text-xs text-[#6E6C7C]">
+            没有可分析的渠道会话；不等于没有客户或业务结果。
+          </p>
+        )}
+      </section>
       <div>
         <h4 className="text-sm font-semibold">操作结果与重试信号</h4>
         <p className="mt-1 text-xs leading-relaxed text-[#6E6C7C]">

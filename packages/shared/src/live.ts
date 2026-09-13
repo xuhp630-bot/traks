@@ -329,7 +329,8 @@ export interface LiveStoreApi {
     fromMs: number,
     toMs: number,
     offset: number,
-    filters?: LiveFilters
+    filters?: LiveFilters,
+    limit?: number
   ): Promise<Record<string, unknown>[]>;
   /** Stores the event and returns the site's event count for its calendar month (site tz) - used for quota enforcement. */
   record(event: LiveEvent): Promise<number>;

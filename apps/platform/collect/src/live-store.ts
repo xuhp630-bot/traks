@@ -36,6 +36,7 @@ import {
   isPagePrefix,
   propLikePatterns,
   buildEvidenceSelect,
+  EVIDENCE_PAGE_SIZE,
 } from '@traks/shared';
 
 // "Today" plus the full previous-day comparison window needs at most 48h in
@@ -115,7 +116,8 @@ export class SiteLiveStore extends DurableObject<unknown> {
     fromMs: number,
     toMs: number,
     offset: number,
-    filters?: LiveFilters
+    filters?: LiveFilters,
+    limit = EVIDENCE_PAGE_SIZE
   ): Promise<Record<string, unknown>[]> {
     if (
       !Number.isFinite(fromMs) ||
@@ -133,7 +135,7 @@ export class SiteLiveStore extends DurableObject<unknown> {
     const params = filter.sql ? [fromMs, toMs, fromMs, toMs, ...filter.params] : [fromMs, toMs];
     return this.sql
       .exec(
-        buildEvidenceSelect(`SELECT * FROM events WHERE ${bounds} ${cohort}`, offset),
+        buildEvidenceSelect(`SELECT * FROM events WHERE ${bounds} ${cohort}`, offset, limit),
         ...params
       )
       .toArray();

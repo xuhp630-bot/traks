@@ -146,6 +146,18 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
       '页面诊断有防刷上限；无错误不代表无故障；人工复核状态不包含在本分析包。',
     ],
     funnels: report.funnels,
+    acquisition: report.acquisition,
+    growthCoverage: {
+      attribution: 'first_observed_pageview_per_collector_session',
+      confirmation: 'browser_observed_server_response_not_independently_verified',
+      contactAcceptance: 'email_provider_accepted_not_delivery_or_qualified_lead',
+      replyPermission: 'this_contact_request_only_not_marketing_consent',
+      qualifiedLeads: null,
+      deliveredFollowups: null,
+      customerReplies: null,
+      crossDayRetention: null,
+      crmConnected: false,
+    },
     operations: report.operations,
     behaviors: report.behaviors,
     issues: report.issues.map(({ key: _key, ...issue }) => issue),
@@ -175,6 +187,14 @@ export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>):
     );
   if (!pack.candidates.length)
     blocks.push('当前没有可生成的候选，可能是样本/覆盖不足；不等于网站没有问题。');
+  blocks.push(
+    '## 渠道与联系请求（会话去重）',
+    '首次已观测原生pageview归因，不是完整多触点归因；受理是浏览器观测的服务端邮件受理响应，不证明送达、合格线索或成交。回复许可仅限本次请求；CRM、实际跟进、客户回复和长期留存未接通。',
+    ...pack.acquisition.map(
+      group =>
+        `${group.channelSource} / ${group.channelMedium} / ${group.channelCampaign} · ${group.path} · ${group.locale}/${group.device}: ${group.sessions}会话，${group.toolSuccessSessions}计算成功，${group.resultUseSessions}使用结果，${group.contactSubmittedSessions}联系提交，${group.contactFailedSessions}失败/校验，${group.acceptedRequestSessions}受理，${group.replyAuthorizedSessions}受理且允许回复，${group.unconfirmedContactSessions}旧成功未确认。`
+    )
+  );
   blocks.push(
     '## 后续优化与复查',
     '- 每次只验证一个明确假设，先保存本包作为基线；不要只为了事件数字好看而改埋点。\n- QA使用独立会话并显式标记analytics_traffic=qa；验证成功、错误、业务限制、取消、重试与隐私退出。\n- 发布需另行授权，并记录真实Git/Worker与埋点标签的对应关系。\n- 上线当天先做功能QA；之后比较相同星期构成、时区、页面、语言、设备、流量及筛选的完整7天窗口；样本不足延长到14/28天并保留“无法判断”。\n- 同看操作成功、失败、取消、重试、无法关联和采集上限；前后对比不是随机实验，不宣称因果改善。\n- 涉及SEO内容/结构时另核GSC页面和查询证据，工程通过不等于搜索恢复。\n- 到复查日期后手动重新导出；本流程未创建后台监控或自动改站。'

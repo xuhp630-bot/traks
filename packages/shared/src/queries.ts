@@ -2,7 +2,7 @@ import { AUTO_EVENTS } from './constants';
 import type { Period } from './constants';
 import type { LiveDimension, LiveFilters } from './live';
 import { AI_HOSTNAME_IN, aiSourceCaseSql } from './ai-sources';
-import { buildEvidenceSelect } from './quality';
+import { buildEvidenceSelect, EVIDENCE_PAGE_SIZE } from './quality';
 
 export interface QueryConfig {
   accountId: string;
@@ -15,7 +15,8 @@ export function buildQualityEvidenceQuery(
   siteId: string,
   range: PeriodRange,
   offset: number,
-  filters?: LiveFilters
+  filters?: LiveFilters,
+  limit = EVIDENCE_PAGE_SIZE
 ) {
   return (table: string) => {
     const bounds = `site_id = '${esc(siteId)}' AND event_type IN ('pageview', 'event')
@@ -25,7 +26,7 @@ export function buildQualityEvidenceQuery(
       filters && Object.keys(filters).length
         ? `AND session_id IN (SELECT DISTINCT session_id FROM ${table} WHERE ${bounds} ${filterClause(filters)})`
         : '';
-    return buildEvidenceSelect(`SELECT * FROM ${table} WHERE ${bounds} ${cohort}`, offset);
+    return buildEvidenceSelect(`SELECT * FROM ${table} WHERE ${bounds} ${cohort}`, offset, limit);
   };
 }
 

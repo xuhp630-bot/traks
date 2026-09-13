@@ -345,7 +345,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_quality_insights',
     description:
-      'Read the site quality-insights summary: whole-cohort traffic classification plus production funnels, operation outcomes, search behavior, issue cards, and optimization candidates. For exhaustive analysis, first page get_quality_evidence to null; this summary does not replace a complete export when a scan is required.',
+      'Read the site quality-insights summary: whole-cohort classification plus production funnels, outcomes, issues, acquisition channel/contact-request counts and growthCoverage. Contact acceptance is a browser-observed server response, not verified delivery, qualified leads, or marketing consent. CRM follow-up/retention remain null. Large scans may still require get_quality_evidence pagination to null; never treat partial results as complete.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id (from list_sites)'), period, ...filterSchema },
