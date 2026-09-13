@@ -449,9 +449,11 @@ function DocsIndex(): ReactElement {
           <p>
             MCP tools: <Inline>list_sites</Inline>, <Inline>get_tracking_snippet</Inline>,{' '}
             <Inline>get_stats</Inline>, <Inline>get_custom_events</Inline>,{' '}
-            <Inline>get_event_props</Inline>, <Inline>list / create / update / delete_goal</Inline>,{' '}
-            <Inline>get_goal_stats</Inline>, <Inline>list / create / update / delete_funnel</Inline>
-            , <Inline>get_funnel_stats</Inline>. The same bearer token authorizes plain REST calls
+            <Inline>get_event_props</Inline>, <Inline>get_quality_evidence</Inline>,{' '}
+            <Inline>get_quality_insights</Inline>,{' '}
+            <Inline>list / create / update / delete_goal</Inline>, <Inline>get_goal_stats</Inline>,{' '}
+            <Inline>list / create / update / delete_funnel</Inline>,{' '}
+            <Inline>get_funnel_stats</Inline>. The same bearer token authorizes plain REST calls
             under <Inline>/api</Inline>. Tokens can never mint other tokens or manage members; those
             actions need a signed-in session.
           </p>

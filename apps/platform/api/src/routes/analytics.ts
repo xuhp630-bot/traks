@@ -17,9 +17,12 @@ import {
   type LiveFilters,
   type LiveRealtimeLocation,
   toLiveFilters,
+  FILTER_PARAM_TO_DIMENSION,
   buildQualityEvidenceQuery,
   EVIDENCE_PAGE_SIZE,
   normalizeEvidence,
+  QualityAccumulator,
+  buildAnalysisPackage,
 } from '@traks/shared';
 import { requireAuth } from '../middleware/auth';
 import { cacheTtlSeconds, freshTtlSeconds } from '../lib/cache-ttl';
@@ -2172,6 +2175,86 @@ export const analyticsRoute = appWithBatch
       });
     }
   )
+
+  .get('/:siteId/stats/quality-insights', requireAuth, validate('query', periodQuery), async c => {
+    const siteId = c.req.param('siteId');
+    const site = await getSite(c, siteId, c.get('userId')!);
+    if (!site) return c.json({ error: 'Not found' }, 404);
+
+    const query = c.req.valid('query');
+    const filters = parseFilters(query);
+    const filterParams = Object.entries(query).filter(
+      ([key, value]) => key in FILTER_PARAM_TO_DIMENSION && value !== undefined && value !== ''
+    );
+    const issuedAt = Date.now();
+    const source = query.period === 'today' ? 'live' : 'historical';
+    const range = resolvePeriod(query.period, new Date(issuedAt), site.timezone);
+    const from = ms(range.from);
+    const to = Math.min(ms(range.to), issuedAt - (source === 'live' ? 5000 : 90_000));
+    if (to <= from)
+      return c.json({ error: 'The reporting window is not ready yet. Retry shortly.' }, 409);
+    range.to = new Date(to).toISOString();
+
+    const accumulator = new QualityAccumulator();
+    let offset = 0;
+    let totalGroups: number | null = null;
+    let totalEvents: number | null = null;
+
+    try {
+      for (;;) {
+        let rows: Record<string, unknown>[];
+        if (source === 'live') {
+          rows = await liveStore(c, siteId).qualityEvidence(from, to, offset, filters);
+        } else {
+          const build = buildQualityEvidenceQuery(siteId, range, offset, filters);
+          try {
+            rows = (await queryR2SqlWithStats(getQueryConfig(c), build)).rows;
+          } catch (error) {
+            if (!isMissingIngestTs(error)) throw error;
+            setIngestPrune(false);
+            rows = (await queryR2SqlWithStats(getQueryConfig(c), build)).rows;
+          }
+        }
+
+        const pageTotalGroups = Number(rows[0]?.total_groups ?? 0);
+        const pageTotalEvents = Number(rows[0]?.total_events ?? 0);
+        if (
+          !Number.isSafeInteger(pageTotalGroups) ||
+          !Number.isSafeInteger(pageTotalEvents) ||
+          (totalGroups !== null && pageTotalGroups !== totalGroups) ||
+          (totalEvents !== null && pageTotalEvents !== totalEvents)
+        ) {
+          return c.json(
+            { error: 'Evidence changed while building insights. Retry the analysis.' },
+            409
+          );
+        }
+        totalGroups = pageTotalGroups;
+        totalEvents = pageTotalEvents;
+
+        const data = rows.slice(0, EVIDENCE_PAGE_SIZE).map(normalizeEvidence);
+        accumulator.add(data);
+        offset += data.length;
+        if (offset >= totalGroups) break;
+      }
+    } catch {
+      return c.json({ error: 'Quality insight scan failed. Retry to avoid partial data.' }, 502);
+    }
+
+    const package_ = buildAnalysisPackage(accumulator.report('production'), {
+      siteId,
+      period: query.period,
+      traffic: 'production',
+      from,
+      to,
+      source,
+      totalGroups: totalGroups ?? 0,
+      totalEvents: totalEvents ?? 0,
+      cohortFilterKeys: filterParams.map(([key]) => key),
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ data: package_ });
+  })
 
   .get('/:siteId/stats/sessions', requireAuth, validate('query', periodQuery), async c => {
     const userId = c.get('userId')!;

@@ -58,6 +58,34 @@ const stepSchema = {
   },
   required: ['type', 'target'],
 };
+const filterSchema = {
+  page: str('Exact page path filter'),
+  source: str('Exact referrer source filter'),
+  utmSource: str('Exact utm_source filter'),
+  utmMedium: str('Exact utm_medium filter'),
+  utmCampaign: str('Exact utm_campaign filter'),
+  country: str('Exact country filter'),
+  region: str('Exact region filter'),
+  city: str('Exact city filter'),
+  browser: str('Exact browser filter'),
+  os: str('Exact operating-system filter'),
+  device: str('Exact device-type filter'),
+};
+const activeFilterParams = (args: Record<string, unknown>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(args)
+      .filter(
+        ([key, value]) =>
+          key in filterSchema && value !== undefined && value !== null && value !== ''
+      )
+      .map(([key, value]) => [key, String(value)])
+  );
+const evidenceProps = {
+  siteId: str('Site id (from list_sites)'),
+  period,
+  ...filterSchema,
+  cursor: str('Opaque cursor returned by the previous page'),
+};
 
 const TOOLS: ToolDef[] = [
   {
@@ -292,6 +320,45 @@ const TOOLS: ToolDef[] = [
     request: a => ({
       method: 'GET',
       path: `/api/analytics/${a.siteId}/stats/bots?period=${a.period}`,
+    }),
+  },
+  {
+    name: 'get_quality_evidence',
+    description:
+      'Read one complete, privacy-normalized page of quality evidence. Keep period and all filters unchanged while following nextCursor until it is null. Today reads live store; other periods read R2 history. Rows include pageviews, custom events, traffic classification (production/qa/internal/unknown), failures, forms, validation, and resource-load evidence.',
+    inputSchema: {
+      type: 'object',
+      properties: evidenceProps,
+      required: ['siteId', 'period'],
+    },
+    request: a => ({
+      method: 'GET',
+      path: `/api/analytics/${encodeURIComponent(String(a.siteId))}/stats/quality-evidence?${new URLSearchParams(
+        {
+          period: String(a.period),
+          ...(a.cursor ? { cursor: String(a.cursor) } : {}),
+          ...activeFilterParams(a),
+        }
+      ).toString()}`,
+    }),
+  },
+  {
+    name: 'get_quality_insights',
+    description:
+      'Read the site quality-insights summary: whole-cohort traffic classification plus production funnels, operation outcomes, search behavior, issue cards, and optimization candidates. For exhaustive analysis, first page get_quality_evidence to null; this summary does not replace a complete export when a scan is required.',
+    inputSchema: {
+      type: 'object',
+      properties: { siteId: str('Site id (from list_sites)'), period, ...filterSchema },
+      required: ['siteId', 'period'],
+    },
+    request: a => ({
+      method: 'GET',
+      path: `/api/analytics/${encodeURIComponent(String(a.siteId))}/stats/quality-insights?${new URLSearchParams(
+        {
+          period: String(a.period),
+          ...activeFilterParams(a),
+        }
+      ).toString()}`,
     }),
   },
 ];

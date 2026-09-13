@@ -159,6 +159,13 @@ and real evidence; synthetic QA must not be mixed into production analysis.
 The in-dashboard Chinese guide and **优化闭环** view explain how to read and act on
 the retained evidence. The operating runbook is
 [reading-optimization-guide.zh-CN.md](./reading-optimization-guide.zh-CN.md).
+The same evidence is available over MCP with a read-only personal token:
+`get_quality_evidence` returns one complete cursor page, and `get_quality_insights`
+returns the privacy-preserving `traks-optimization-evidence/v1` aggregate package
+after an internal complete scan. The aggregate endpoint rejects partial results
+if source totals change. MCP clients must keep the period and filters unchanged
+while paging `get_quality_evidence` until `nextCursor` is null; a summary is not a
+substitute for that complete export when the task requires raw retained evidence.
 The versioned `traks-optimization-evidence/v1` JSON and Markdown action brief are
 available only after a complete successful scan. They export all selected-traffic
 aggregate groups and candidates, never just the visible previews. They omit raw

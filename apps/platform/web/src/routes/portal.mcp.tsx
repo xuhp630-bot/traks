@@ -141,6 +141,8 @@ const TOOLS: { name: string; desc: string; manage?: boolean }[] = [
   { name: 'get_funnel_stats', desc: 'step completion and drop-off' },
   { name: 'get_custom_events', desc: 'events fired, counts and totals' },
   { name: 'get_event_props', desc: 'property breakdown for one event' },
+  { name: 'get_quality_evidence', desc: 'complete paginated quality evidence' },
+  { name: 'get_quality_insights', desc: 'quality summary, issue cards and candidates' },
   { name: 'get_webmcp_stats', desc: 'which WebMCP tools agents call' },
   { name: 'get_bot_stats', desc: 'bot pageviews by name' },
   { name: 'list_goals', desc: 'goals defined for a site' },
