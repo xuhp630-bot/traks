@@ -37,6 +37,13 @@ QA > internal > labelled production > unknown. A late QA marker excludes the
 whole observed session from the production view, including earlier events.
 Historical `release-qa` pageviews also provide explicit QA evidence.
 
+Unknown sessions remain unknown, but the complete export reports a diagnostic
+reason without relabelling history: `pageview_only_unknown` (no custom workflow
+evidence), `legacy_custom_unknown` (custom events without a valid version), or
+`missing_context_unknown` (versioned custom events that do not provide a valid
+production/qa/internal label). Pageview-only traffic must not be interpreted as
+verified human visitors or user churn.
+
 ## Complete reads and session export
 
 `GET /api/analytics/:siteId/stats/quality-evidence?period=…&cursor=…` uses the existing

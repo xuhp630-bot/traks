@@ -27,6 +27,11 @@ const TRAFFIC = {
   unknown: 'Historical / unknown',
   all: 'All traffic',
 } as const;
+const UNKNOWN_REASONS = {
+  pageview_only_unknown: 'Pageview only',
+  legacy_custom_unknown: 'Legacy custom events',
+  missing_context_unknown: 'Custom events missing context',
+} as const;
 const REVIEWS = {
   unverified: 'Not rechecked',
   reproduced: 'Reproduced manually',
@@ -314,6 +319,18 @@ export function QualityConsole({
               </div>
             ))}
           </div>
+          {traffic === 'unknown' && (
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {Object.entries(UNKNOWN_REASONS).map(([kind, title]) => (
+                <div key={kind} className="rounded-xl bg-[#F7F7F3] p-3">
+                  <p className="text-[10px] text-[#6E6C7C]">{title}</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-[#3D3B4F]">
+                    {report.unknownClassification[kind as keyof typeof UNKNOWN_REASONS]}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
           <p className="mt-3 break-words text-[11px] leading-relaxed text-[#6E6C7C]">
             Complete: {scan.data.totalGroups} groups / {scan.data.totalEvents} events. Window:{' '}
             {date(scan.data.window.from)} → {date(scan.data.window.to)} ({scan.data.window.source}).{' '}
@@ -418,6 +435,11 @@ export function QualityConsole({
                         {date(session.startedAt)} ·{' '}
                         {session.versions.join(' / ') || 'Version unknown'}
                       </p>
+                      {session.traffic === 'unknown' && session.unknownReason && (
+                        <p className="mt-1 text-[11px] text-[#6E6C7C]">
+                          Unknown reason: {UNKNOWN_REASONS[session.unknownReason]}
+                        </p>
+                      )}
                     </div>
                     <p className="shrink-0 tabular-nums">
                       {session.pageviews} PV · {session.events} events

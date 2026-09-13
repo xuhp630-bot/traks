@@ -2,6 +2,10 @@ import { ActionAccumulator } from './quality-actions';
 
 export type TrafficClass = 'production' | 'qa' | 'internal' | 'unknown';
 export type TrafficSelection = TrafficClass | 'all';
+export type UnknownClass =
+  | 'pageview_only_unknown'
+  | 'legacy_custom_unknown'
+  | 'missing_context_unknown';
 
 const FAILURE_REASONS = [
   'unknown',
@@ -297,6 +301,7 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
 export interface QualitySession {
   sessionId: string;
   traffic: TrafficClass;
+  unknownReason: UnknownClass | null;
   startedAt: number;
   lastAt: number;
   entryPath: string;
@@ -469,6 +474,7 @@ export class QualityAccumulator {
           summary: {
             sessionId: event.sessionId,
             traffic: 'unknown',
+            unknownReason: 'pageview_only_unknown',
             startedAt: event.ts,
             lastAt: event.ts,
             entryPath: event.path,
@@ -486,6 +492,9 @@ export class QualityAccumulator {
       const session = state.summary;
       if (TRAFFIC_RANK[event.traffic] > TRAFFIC_RANK[session.traffic])
         session.traffic = event.traffic;
+      if (session.traffic === 'unknown' && event.eventType !== 'pageview')
+        session.unknownReason =
+          event.version === 'unknown' ? 'legacy_custom_unknown' : 'missing_context_unknown';
       session.lastAt = event.ts;
       if (event.eventType === 'pageview') {
         if (!session.pageviews) session.entryPath = event.path;
@@ -589,11 +598,18 @@ export class QualityAccumulator {
       internal: 0,
       unknown: 0,
     };
+    const unknownClassification: Record<UnknownClass, number> = {
+      pageview_only_unknown: 0,
+      legacy_custom_unknown: 0,
+      missing_context_unknown: 0,
+    };
     const sessions: QualitySession[] = [];
     const funnels = new Map<string, CalculatorFunnel>();
     const issues = new Map<string, QualityIssue>();
     for (const state of this.sessions.values()) {
       classification[state.summary.traffic] += 1;
+      if (state.summary.traffic === 'unknown' && state.summary.unknownReason)
+        unknownClassification[state.summary.unknownReason] += 1;
       if (traffic !== 'all' && state.summary.traffic !== traffic) continue;
       sessions.push(state.summary);
       for (const [key, funnel] of state.funnels) {
@@ -638,6 +654,7 @@ export class QualityAccumulator {
     );
     return {
       classification,
+      unknownClassification,
       sessions,
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),
       funnels: [...funnels.values()],
@@ -658,6 +675,7 @@ export function sessionsCsv(sessions: QualitySession[]): string {
       [
         'session_id',
         'traffic',
+        'unknown_reason',
         'started_at_utc',
         'last_at_utc',
         'entry_path',
@@ -671,6 +689,7 @@ export function sessionsCsv(sessions: QualitySession[]): string {
         [
           session.sessionId,
           session.traffic,
+          session.unknownReason ?? '',
           new Date(session.startedAt).toISOString(),
           new Date(session.lastAt).toISOString(),
           session.entryPath,
