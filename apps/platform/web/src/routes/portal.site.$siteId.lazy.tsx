@@ -61,6 +61,7 @@ import { GoalFormModal, type GoalDef } from '@/components/analytics/GoalFormModa
 import { GoalsDrawer } from '@/components/analytics/GoalsDrawer';
 import { EventsPathsExplorer } from '@/components/analytics/EventsPathsExplorer';
 import { QualityConsole } from '@/components/analytics/QualityConsole';
+import { BusinessPanel } from '@/components/analytics/BusinessPanel';
 import { FunnelFormModal } from '@/components/analytics/FunnelFormModal';
 import { FunnelsDrawer } from '@/components/analytics/FunnelsDrawer';
 import { FunnelsPanel } from '@/components/analytics/FunnelsPanel';
@@ -95,10 +96,13 @@ function getStaleTime(period: Period): number {
 }
 
 // Lazy-render hook: returns true once the sentinel element scrolls into view
-function useLazyVisible(): [ref: React.RefObject<HTMLDivElement | null>, visible: boolean] {
+function useLazyVisible(
+  enabled: boolean
+): [ref: React.RefObject<HTMLDivElement | null>, visible: boolean] {
   const ref = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
+    if (!enabled || visible) return;
     const el = ref.current;
     if (!el) return;
     const observer = new IntersectionObserver(
@@ -112,7 +116,7 @@ function useLazyVisible(): [ref: React.RefObject<HTMLDivElement | null>, visible
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [enabled, visible]);
   return [ref, visible];
 }
 
@@ -1053,6 +1057,7 @@ function SiteAnalyticsPage(): ReactElement {
   const [funnelsOpen, setFunnelsOpen] = useState(false);
   const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
   const [chartMetric, setChartMetric] = useState<ChartMetric>('visitors');
+  const [showRaw, setShowRaw] = useState(false);
 
   // Per-panel tab state
   const [pagesTab, setPagesTab] = useState('top');
@@ -1062,7 +1067,7 @@ function SiteAnalyticsPage(): ReactElement {
   // Links panel: outbound clicks and file downloads share one card
   const [linkTab, setLinkTab] = useState('outbound');
   // Lazy-render sentinels for below-fold sections
-  const [belowFoldRef, belowFoldVisible] = useLazyVisible();
+  const [belowFoldRef, belowFoldVisible] = useLazyVisible(showRaw);
 
   // Live visitors (last 5 min): pushed from the site's DO over a WebSocket,
   // polled every 30s while the socket is down. Declared before handleRefresh,
@@ -1078,6 +1083,7 @@ function SiteAnalyticsPage(): ReactElement {
       predicate: q => realtime.status !== 'live' || q.queryKey[2] !== 'realtime',
     });
     await queryClient.invalidateQueries({ queryKey: ['site', siteId] });
+    await queryClient.invalidateQueries({ queryKey: ['site-business', siteId] });
     setTimeout(() => setRefreshing(false), 600);
   }, [queryClient, siteId, realtime.status]);
 
@@ -1098,7 +1104,7 @@ function SiteAnalyticsPage(): ReactElement {
   // server round-trip (and, on 'today', a single fan-out to the live store) -
   // seven browser requests collapsed into one. It has no filtered variant, so
   // the moment a filter chip is active we fall back to per-panel requests.
-  const useBootstrap = !hasFilters;
+  const useBootstrap = showRaw && !hasFilters;
   const bootstrapQ = useQuery({
     queryKey: ['site-analytics', siteId, 'all', period],
     queryFn: async () => api.getAllStats(siteId, period),
@@ -1172,13 +1178,13 @@ function SiteAnalyticsPage(): ReactElement {
   // per site per day. Runs after the bundle settles so it never competes
   // with the hot path, and only unfiltered (the bundle has no filtered form).
   useEffect(() => {
-    if (period !== 'today' || hasFilters || !bootstrapSettled) return;
+    if (!showRaw || period !== 'today' || hasFilters || !bootstrapSettled) return;
     void queryClient.prefetchQuery({
       queryKey: ['site-analytics', siteId, 'all', 'yesterday'],
       queryFn: async () => api.getAllStats(siteId, 'yesterday'),
       staleTime: getStaleTime('yesterday'),
     });
-  }, [queryClient, siteId, period, hasFilters, bootstrapSettled]);
+  }, [queryClient, siteId, period, hasFilters, bootstrapSettled, showRaw]);
 
   // Per-tile parallel queries - each tile renders as its own request resolves.
   // Tabbed panels pass `enabled` so only the active tab's query runs (each
@@ -1208,7 +1214,7 @@ function SiteAnalyticsPage(): ReactElement {
     },
     refetchInterval: inBundle && bundlePolls ? false : getRefetchInterval(period),
     staleTime: getStaleTime(period),
-    enabled: enabled && (!inBundle || bootstrapSettled),
+    enabled: showRaw && enabled && (!inBundle || bootstrapSettled),
     // Key changes (period/filter switches) show the previous view's rows
     // while the new ones load, instead of dropping every panel to skeletons.
     placeholderData: keepPrevious ? keepPreviousData : undefined,
@@ -1370,7 +1376,7 @@ function SiteAnalyticsPage(): ReactElement {
       return api.getFunnels(siteId);
     },
     staleTime: 60_000,
-    enabled: belowFoldVisible,
+    enabled: showRaw && belowFoldVisible,
   });
   const funnelList = ((funnelsQ.data as any)?.data ?? []) as FunnelDef[];
   const activeFunnelId =
@@ -1508,11 +1514,13 @@ function SiteAnalyticsPage(): ReactElement {
                 {site?.domain && currentVisitors !== null && (
                   <span className="h-[3px] w-[3px] rounded-full bg-[#D8D2CA]" />
                 )}
-                <LivePill
-                  count={currentVisitors}
-                  status={realtime.status}
-                  onClick={() => setLiveOpen(true)}
-                />
+                {showRaw && (
+                  <LivePill
+                    count={currentVisitors}
+                    status={realtime.status}
+                    onClick={() => setLiveOpen(true)}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -1581,6 +1589,22 @@ function SiteAnalyticsPage(): ReactElement {
         />
 
         {/* Active filters */}
+        <div
+          role="group"
+          aria-label="统计视图"
+          className="mb-4 inline-flex max-w-full rounded-md border bg-white p-1"
+        >
+          {[false, true].map(raw => (
+            <button
+              key={String(raw)}
+              aria-pressed={showRaw === raw}
+              onClick={() => setShowRaw(raw)}
+              className={`min-h-11 rounded px-4 text-sm ${showRaw === raw ? 'bg-[#467B64] text-white' : 'text-[#3D3B4F]'}`}
+            >
+              {raw ? '原始流量' : '经营口径'}
+            </button>
+          ))}
+        </div>
         {hasFilters && (
           <FilterChips filters={filters} onRemove={removeFilter} onClear={clearFilters} />
         )}
@@ -1588,232 +1612,246 @@ function SiteAnalyticsPage(): ReactElement {
         {/* Dimmed while a period/filter switch still shows the previous
             view's rows (see `switching`). */}
         <div
-          className={`space-y-6 transition-opacity duration-300 ${switching ? 'opacity-50' : ''}`}
-          aria-busy={switching}
+          className={`space-y-6 transition-opacity duration-300 ${showRaw && switching ? 'opacity-50' : ''}`}
+          aria-busy={showRaw && switching}
         >
-          {/* Main chart card: metric tiles + timeseries */}
-          <ChartCard
-            stats={(mainQ.data as any)?.data}
-            statsLoading={mainQ.isLoading}
-            statsError={mainQ.isError}
-            timeseries={(timeseriesQ.data as any)?.data}
-            timeseriesLoading={timeseriesQ.isLoading}
-            timeseriesError={timeseriesQ.isError}
-            metric={chartMetric}
-            onMetricChange={setChartMetric}
-            period={period}
-          />
-
-          <QualityConsole
-            key={JSON.stringify([siteId, period, filters])}
-            siteId={siteId}
-            period={period}
-            filters={filters}
-          />
-          <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
-
-          {/* Pages + Sources */}
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <PanelCard
-              title="Top Pages"
-              labelHeader={
-                pagesTab === 'top' ? 'Page' : pagesTab === 'entry' ? 'Entry page' : 'Exit page'
-              }
-              items={(pagesQ.data as any)?.data}
-              isLoading={pagesQ.isLoading}
-              isError={pagesQ.isError}
-              showPageviews={pagesTab === 'top'}
-              tabs={[
-                { key: 'top', label: 'Pages' },
-                { key: 'entry', label: 'Entry' },
-                { key: 'exit', label: 'Exit' },
-              ]}
-              activeTab={pagesTab}
-              onTabChange={setPagesTab}
-              onItemClick={item => setFilter('page', item.name)}
+          {!showRaw ? (
+            <BusinessPanel
+              key={JSON.stringify([siteId, period, filters])}
+              siteId={siteId}
+              period={period}
+              filters={filters}
             />
-            <PanelCard
-              title="Top Sources"
-              labelHeader={sourceTab === 'ai' ? 'AI Assistant' : 'Source'}
-              items={(sourceQ.data as any)?.data}
-              isLoading={sourceQ.isLoading}
-              isError={sourceQ.isError}
-              emptyText={sourceTab === 'ai' ? 'No AI traffic yet' : undefined}
-              tabs={[
-                { key: 'referrers', label: 'Referrers' },
-                { key: 'utm_source', label: 'UTM Source' },
-                { key: 'utm_medium', label: 'Medium' },
-                { key: 'utm_campaign', label: 'Campaign' },
-                { key: 'ai', label: 'AI' },
-              ]}
-              activeTab={sourceTab}
-              onTabChange={setSourceTab}
-              onItemClick={
-                // AI rows are assistant names spanning several referrer
-                // hostnames - no single exact-match filter value exists.
-                sourceTab === 'ai'
-                  ? undefined
-                  : item => {
-                      const keyByTab: Record<string, keyof AnalyticsFilters> = {
-                        referrers: 'source',
-                        utm_source: 'utmSource',
-                        utm_medium: 'utmMedium',
-                        utm_campaign: 'utmCampaign',
-                      };
-                      setFilter(keyByTab[sourceTab], item.name);
-                    }
-              }
-            />
-          </div>
-
-          {/* Below-fold sentinel + lazy-rendered sections */}
-          <div ref={belowFoldRef} />
-          {belowFoldVisible && (
+          ) : (
             <>
-              {/* Locations + Devices */}
+              <p className="text-sm text-[#6E6C7C]">
+                原始混合统计，包含内部、QA 与未分类访问；目标及漏斗并非经营转化率。
+              </p>
+              {/* Main chart card: metric tiles + timeseries */}
+              <ChartCard
+                stats={(mainQ.data as any)?.data}
+                statsLoading={mainQ.isLoading}
+                statsError={mainQ.isError}
+                timeseries={(timeseriesQ.data as any)?.data}
+                timeseriesLoading={timeseriesQ.isLoading}
+                timeseriesError={timeseriesQ.isError}
+                metric={chartMetric}
+                onMetricChange={setChartMetric}
+                period={period}
+              />
+
+              <QualityConsole
+                key={JSON.stringify([siteId, period, filters])}
+                siteId={siteId}
+                period={period}
+                filters={filters}
+              />
+              <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
+
+              {/* Pages + Sources */}
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <PanelCard
-                  title="Locations"
+                  title="Top Pages"
                   labelHeader={
-                    locationTab === 'country'
-                      ? 'Country'
-                      : locationTab === 'region'
-                        ? 'Region'
-                        : 'City'
+                    pagesTab === 'top' ? 'Page' : pagesTab === 'entry' ? 'Entry page' : 'Exit page'
                   }
-                  items={locationItems}
-                  isLoading={locationQ.isLoading}
-                  isError={locationQ.isError}
+                  items={(pagesQ.data as any)?.data}
+                  isLoading={pagesQ.isLoading}
+                  isError={pagesQ.isError}
+                  showPageviews={pagesTab === 'top'}
                   tabs={[
-                    { key: 'country', label: 'Countries' },
-                    { key: 'region', label: 'Regions' },
-                    { key: 'city', label: 'Cities' },
+                    { key: 'top', label: 'Pages' },
+                    { key: 'entry', label: 'Entry' },
+                    { key: 'exit', label: 'Exit' },
                   ]}
-                  activeTab={locationTab}
-                  onTabChange={setLocationTab}
-                  onItemClick={item =>
-                    setFilter(
-                      locationTab === 'country'
-                        ? 'country'
-                        : locationTab === 'region'
-                          ? 'region'
-                          : 'city',
-                      item.name
-                    )
-                  }
+                  activeTab={pagesTab}
+                  onTabChange={setPagesTab}
+                  onItemClick={item => setFilter('page', item.name)}
                 />
                 <PanelCard
-                  title="Devices"
-                  labelHeader={
-                    deviceTab === 'browser'
-                      ? 'Browser'
-                      : deviceTab === 'os'
-                        ? 'OS'
-                        : deviceTab === 'device'
-                          ? 'Device'
-                          : 'Size'
-                  }
-                  items={deviceItems}
-                  showPercentage
-                  isLoading={deviceQ.isLoading}
-                  isError={deviceQ.isError}
+                  title="Top Sources"
+                  labelHeader={sourceTab === 'ai' ? 'AI Assistant' : 'Source'}
+                  items={(sourceQ.data as any)?.data}
+                  isLoading={sourceQ.isLoading}
+                  isError={sourceQ.isError}
+                  emptyText={sourceTab === 'ai' ? 'No AI traffic yet' : undefined}
                   tabs={[
-                    { key: 'browser', label: 'Browser' },
-                    { key: 'os', label: 'OS' },
-                    { key: 'device', label: 'Device' },
-                    { key: 'size', label: 'Size' },
+                    { key: 'referrers', label: 'Referrers' },
+                    { key: 'utm_source', label: 'UTM Source' },
+                    { key: 'utm_medium', label: 'Medium' },
+                    { key: 'utm_campaign', label: 'Campaign' },
+                    { key: 'ai', label: 'AI' },
                   ]}
-                  activeTab={deviceTab}
-                  onTabChange={setDeviceTab}
+                  activeTab={sourceTab}
+                  onTabChange={setSourceTab}
                   onItemClick={
-                    // Screen-size buckets are computed, not a stored column - no filter.
-                    deviceTab === 'size'
+                    // AI rows are assistant names spanning several referrer
+                    // hostnames - no single exact-match filter value exists.
+                    sourceTab === 'ai'
                       ? undefined
-                      : item =>
-                          setFilter(
-                            deviceTab === 'browser'
-                              ? 'browser'
-                              : deviceTab === 'os'
-                                ? 'os'
-                                : 'device',
-                            item.name
-                          )
+                      : item => {
+                          const keyByTab: Record<string, keyof AnalyticsFilters> = {
+                            referrers: 'source',
+                            utm_source: 'utmSource',
+                            utm_medium: 'utmMedium',
+                            utm_campaign: 'utmCampaign',
+                          };
+                          setFilter(keyByTab[sourceTab], item.name);
+                        }
                   }
                 />
               </div>
 
-              {/* Goal conversions and auto-tracked links. Event coverage and
-                  user paths render above so tracking health is immediately visible. */}
-              <GoalsPanel
-                goals={(goalStatsQ.data as any)?.data}
-                isLoading={goalStatsQ.isLoading}
-                isError={goalStatsQ.isError}
-                onAdd={canManage ? () => setGoalForm({ goal: null }) : undefined}
-                onManage={canManage ? () => setGoalsOpen(true) : undefined}
-              />
-              <PanelCard
-                title="Links"
-                labelHeader="URL"
-                items={(linkQ.data as any)?.data}
-                isLoading={linkQ.isLoading}
-                isError={linkQ.isError}
-                tabs={LINK_TABS}
-                activeTab={linkTab}
-                onTabChange={setLinkTab}
-                emptyText={
-                  linkTab === 'outbound' ? 'No outbound clicks yet' : 'No file downloads yet'
-                }
-              />
+              {/* Below-fold sentinel + lazy-rendered sections */}
+              <div ref={belowFoldRef} />
+              {belowFoldVisible && (
+                <>
+                  {/* Locations + Devices */}
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    <PanelCard
+                      title="Locations"
+                      labelHeader={
+                        locationTab === 'country'
+                          ? 'Country'
+                          : locationTab === 'region'
+                            ? 'Region'
+                            : 'City'
+                      }
+                      items={locationItems}
+                      isLoading={locationQ.isLoading}
+                      isError={locationQ.isError}
+                      tabs={[
+                        { key: 'country', label: 'Countries' },
+                        { key: 'region', label: 'Regions' },
+                        { key: 'city', label: 'Cities' },
+                      ]}
+                      activeTab={locationTab}
+                      onTabChange={setLocationTab}
+                      onItemClick={item =>
+                        setFilter(
+                          locationTab === 'country'
+                            ? 'country'
+                            : locationTab === 'region'
+                              ? 'region'
+                              : 'city',
+                          item.name
+                        )
+                      }
+                    />
+                    <PanelCard
+                      title="Devices"
+                      labelHeader={
+                        deviceTab === 'browser'
+                          ? 'Browser'
+                          : deviceTab === 'os'
+                            ? 'OS'
+                            : deviceTab === 'device'
+                              ? 'Device'
+                              : 'Size'
+                      }
+                      items={deviceItems}
+                      showPercentage
+                      isLoading={deviceQ.isLoading}
+                      isError={deviceQ.isError}
+                      tabs={[
+                        { key: 'browser', label: 'Browser' },
+                        { key: 'os', label: 'OS' },
+                        { key: 'device', label: 'Device' },
+                        { key: 'size', label: 'Size' },
+                      ]}
+                      activeTab={deviceTab}
+                      onTabChange={setDeviceTab}
+                      onItemClick={
+                        // Screen-size buckets are computed, not a stored column - no filter.
+                        deviceTab === 'size'
+                          ? undefined
+                          : item =>
+                              setFilter(
+                                deviceTab === 'browser'
+                                  ? 'browser'
+                                  : deviceTab === 'os'
+                                    ? 'os'
+                                    : 'device',
+                                item.name
+                              )
+                      }
+                    />
+                  </div>
 
-              {/* WebMCP tool calls: agent invocations of tools the page exposes
+                  {/* Goal conversions and auto-tracked links. Event coverage and
+                  user paths render above so tracking health is immediately visible. */}
+                  <GoalsPanel
+                    goals={(goalStatsQ.data as any)?.data}
+                    isLoading={goalStatsQ.isLoading}
+                    isError={goalStatsQ.isError}
+                    onAdd={canManage ? () => setGoalForm({ goal: null }) : undefined}
+                    onManage={canManage ? () => setGoalsOpen(true) : undefined}
+                  />
+                  <PanelCard
+                    title="Links"
+                    labelHeader="URL"
+                    items={(linkQ.data as any)?.data}
+                    isLoading={linkQ.isLoading}
+                    isError={linkQ.isError}
+                    tabs={LINK_TABS}
+                    activeTab={linkTab}
+                    onTabChange={setLinkTab}
+                    emptyText={
+                      linkTab === 'outbound' ? 'No outbound clicks yet' : 'No file downloads yet'
+                    }
+                  />
+
+                  {/* WebMCP tool calls: agent invocations of tools the page exposes
                 via document.modelContext, auto-tracked by the tracker's
                 registerTool wrapper as reserved custom events. Rows that had
                 failures show the error count next to the tool name. */}
-              <PanelCard
-                title="Agent Tools (WebMCP)"
-                labelHeader="Tool"
-                valueHeader="Calls"
-                items={(
-                  (webmcpQ.data as any)?.data as
-                    | { name: string; calls: number; errors: number; avgMs: number }[]
-                    | undefined
-                )?.map(t => ({
-                  name: t.errors > 0 ? `${t.name} · ${t.errors} failed` : t.name,
-                  visitors: t.calls,
-                }))}
-                isLoading={webmcpQ.isLoading}
-                isError={webmcpQ.isError}
-                emptyText="No agent tool calls yet"
-              />
+                  <PanelCard
+                    title="Agent Tools (WebMCP)"
+                    labelHeader="Tool"
+                    valueHeader="Calls"
+                    items={(
+                      (webmcpQ.data as any)?.data as
+                        | { name: string; calls: number; errors: number; avgMs: number }[]
+                        | undefined
+                    )?.map(t => ({
+                      name: t.errors > 0 ? `${t.name} · ${t.errors} failed` : t.name,
+                      visitors: t.calls,
+                    }))}
+                    isLoading={webmcpQ.isLoading}
+                    isError={webmcpQ.isError}
+                    emptyText="No agent tool calls yet"
+                  />
 
-              {/* Bot traffic: counted at ingest under its own event type, so
+                  {/* Bot traffic: counted at ingest under its own event type, so
                 it never touches the human metrics above. Value shown is
                 distinct visitors per bot (crawlers, AI agents, monitors). */}
-              <PanelCard
-                title="Bots"
-                labelHeader="Bot"
-                valueHeader="Visitors"
-                items={(
-                  (botsQ.data as any)?.data as
-                    | { name: string; visitors: number; pageviews: number }[]
-                    | undefined
-                )?.map(b => ({ name: b.name, visitors: b.visitors }))}
-                isLoading={botsQ.isLoading}
-                isError={botsQ.isError}
-                emptyText="No bot visits yet"
-              />
+                  <PanelCard
+                    title="Bots"
+                    labelHeader="Bot"
+                    valueHeader="Visitors"
+                    items={(
+                      (botsQ.data as any)?.data as
+                        | { name: string; visitors: number; pageviews: number }[]
+                        | undefined
+                    )?.map(b => ({ name: b.name, visitors: b.visitors }))}
+                    isLoading={botsQ.isLoading}
+                    isError={botsQ.isError}
+                    emptyText="No bot visits yet"
+                  />
 
-              {/* Funnels */}
-              <FunnelsPanel
-                funnels={funnelsQ.isLoading ? undefined : funnelList}
-                selectedId={activeFunnelId}
-                onSelect={setSelectedFunnelId}
-                stat={(funnelStatsQ.data as any)?.data as FunnelStat | undefined}
-                isLoading={funnelStatsQ.isLoading}
-                isError={funnelStatsQ.isError || funnelsQ.isError}
-                onAdd={canManage ? () => setFunnelForm({ funnel: null }) : undefined}
-                onManage={canManage ? () => setFunnelsOpen(true) : undefined}
-              />
+                  {/* Funnels */}
+                  <FunnelsPanel
+                    funnels={funnelsQ.isLoading ? undefined : funnelList}
+                    selectedId={activeFunnelId}
+                    onSelect={setSelectedFunnelId}
+                    stat={(funnelStatsQ.data as any)?.data as FunnelStat | undefined}
+                    isLoading={funnelStatsQ.isLoading}
+                    isError={funnelStatsQ.isError || funnelsQ.isError}
+                    onAdd={canManage ? () => setFunnelForm({ funnel: null }) : undefined}
+                    onManage={canManage ? () => setFunnelsOpen(true) : undefined}
+                  />
+                </>
+              )}
             </>
           )}
         </div>

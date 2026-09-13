@@ -17,6 +17,19 @@ const report = z.object({
   to: z.string().datetime(),
   generatedAt: z.string().datetime(),
   crmConnected: z.literal(true),
+  registrations: z
+    .object({
+      coverage: z.literal('current_database_snapshot'),
+      asOf: z.string().datetime(),
+      total: count,
+      ownerAccounts: count,
+      otherAccounts: count,
+      verifiedAccounts: count,
+      unverifiedAccounts: count,
+      bannedAccounts: count,
+      createdInWindow: count,
+    })
+    .optional(),
   followupSendingEnabled: z.boolean(),
   population: z.literal('production_labeled_requests_not_verified_humans'),
   counts,
@@ -112,6 +125,15 @@ export async function readCrmQuality(
     body += decoder.decode(part.value, { stream: true });
   }
   const result = report.parse(JSON.parse(body + decoder.decode()));
+  const accounts = result.registrations;
+  if (
+    accounts &&
+    (accounts.ownerAccounts + accounts.otherAccounts !== accounts.total ||
+      accounts.verifiedAccounts + accounts.unverifiedAccounts !== accounts.total ||
+      accounts.bannedAccounts > accounts.total ||
+      accounts.createdInWindow > accounts.total)
+  )
+    throw new Error('Invalid registration denominator');
   if (result.from !== canonicalWindow.from || result.to !== canonicalWindow.to)
     throw new Error('CRM window mismatch');
   if (
@@ -127,8 +149,10 @@ export async function readCrmQuality(
   return {
     status: 'connected' as const,
     ...result,
+    registrations: result.registrations ?? null,
     limitations: [
       'Independent server-side business aggregate, not a join with anonymous Traks sessions or UTM attribution.',
+      'Registrations are all currently stored accounts, including owner/test/banned accounts, not verified humans. Deleted accounts are absent; verification states are current. Missing registration integration is null, not zero.',
       'Production labels are not proof of humans. QA/internal/unknown are excluded.',
       'Qualification and customer replies are owner-confirmed. Optional inbound candidates are metadata-only, not verified humans; automatic replies cannot be excluded and old integrations may not report inbound coverage.',
       'Provider acceptance is not delivery; delivery is not reading, customer reply or a sale.',

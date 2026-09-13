@@ -1,5 +1,6 @@
 import { ActionAccumulator } from './quality-actions';
 import { GrowthAccumulator } from './quality-growth';
+import { EntryFunnelAccumulator } from './quality-entry-funnels';
 
 export type TrafficClass = 'production' | 'qa' | 'internal' | 'unknown';
 export type TrafficSelection = TrafficClass | 'all';
@@ -479,6 +480,7 @@ function failureSignal(
 export class QualityAccumulator {
   private actions = new ActionAccumulator();
   private growth = new GrowthAccumulator();
+  private entryFunnels = new EntryFunnelAccumulator();
   private sessions = new Map<string, SessionState>();
   private lastTimestamp = -Infinity;
   unassociatedEvents = 0;
@@ -541,6 +543,7 @@ export class QualityAccumulator {
       const action = event.eventName.replace(/^concrete_workflow_/, '');
       this.actions.add(event, action);
       this.growth.add(event, action);
+      this.entryFunnels.add(event, action);
       if (action === 'diagnostic_limit_reached') session.diagnosticsLimited = true;
       const failure = failureSignal(event, action);
       if (calculatorPath(event.path) && event.version !== 'unknown') {
@@ -693,6 +696,7 @@ export class QualityAccumulator {
       unknownClassification,
       sessions,
       acquisition: this.growth.report(new Set(sessions.map(session => session.sessionId))),
+      entryFunnels: this.entryFunnels.report(new Set(sessions.map(session => session.sessionId))),
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),
       funnels: [...funnels.values()],
       issues: [...issues.values()].sort((first, second) => second.sessions - first.sessions),

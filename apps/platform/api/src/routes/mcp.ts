@@ -91,7 +91,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_crm_quality',
     description:
-      'Read independent server-confirmed CRM aggregates for an authorized site: request-only permission, owner-qualified requests, actual follow-up acceptance, signed delivery/failure receipts, owner-confirmed replies and mature verified-account project-save retention. No contact data, no sending, no CRM writes. Requires a server-side site binding; not_connected is not zero. No anonymous-session/UTM join; automatic inbound replies remain unconnected. Explicit completed UTC window within 90 days.',
+      'Read independent server-confirmed CRM aggregates: current stored registration totals and verification states (including owner/test accounts, missing integration is null), request-only permission, qualified requests, follow-up acceptance, signed delivery/failure receipts, owner-confirmed replies and mature project-save retention. No personal data, sending or writes. Requires authorized site binding. No anonymous-session/UTM join; inbound metadata is not verified replies. Explicit completed UTC window within 90 days.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -245,7 +245,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_stats',
     description:
-      'Full dashboard for a site and period: main stats (visitors, pageviews, sessions, bounce, duration, deltas), timeseries, top pages, referrers, countries, browsers, OS.',
+      'Raw mixed-traffic dashboard: main stats, timeseries, pages, referrers and devices. Includes internal, QA and unknown traffic; not a business conversion denominator. Use get_quality_insights for consistent production-labelled business metrics and entry funnels.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id'), period },
@@ -258,7 +258,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: 'get_goal_stats',
-    description: 'Conversion counts and rates for every goal in the period.',
+    description:
+      'Raw mixed-traffic goal counts and rates; includes internal/QA/unknown. Use get_quality_insights for production-labelled business goals with the same selected-session denominator.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id'), period },
@@ -271,7 +272,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     name: 'get_funnel_stats',
-    description: 'Step-by-step completion counts and drop-off rates for one funnel.',
+    description:
+      'Raw mixed-traffic configured funnel. Only covers its declared entry steps, not every tool visit. Use get_quality_insights for production-labelled article/direct/directory entry funnels.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id'), funnelId: str('Funnel id'), period },
@@ -364,7 +366,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_quality_insights',
     description:
-      'Read the site quality-insights summary: whole-cohort classification plus production funnels, outcomes, issues, acquisition channel/contact-request counts and growthCoverage. Contact acceptance is a browser-observed server response, not verified delivery, qualified leads, or marketing consent. CRM follow-up/retention remain null. Large scans may still require get_quality_evidence pagination to null; never treat partial results as complete.',
+      'Preferred business report: complete cohort classification and separately displayed unknown/internal/QA coverage; business pageviews and goals share the selected production-labelled session denominator. Includes strictly ordered article/direct/directory entryFunnels, operations and issues. Production labels do not prove humans. Contact acceptance is browser-observed, not delivery or a qualified lead. Read get_crm_quality separately for account totals and server-confirmed business evidence; never join anonymous sessions to accounts. Check complete before interpreting metrics.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id (from list_sites)'), period, ...filterSchema },

@@ -1,6 +1,7 @@
-import { hc } from 'hono/client';
+import { hc, type InferResponseType } from 'hono/client';
 import type { AppType } from '@traks/platform-api';
 import type { Period, EvidencePage } from '@traks/shared';
+import type { buildAnalysisPackage } from '@traks/shared';
 import { authClient } from '@/lib/auth-client';
 
 /** Click-to-filter params, passed through to the analytics endpoints. */
@@ -21,6 +22,10 @@ export interface AnalyticsFilters {
 // Same-origin: /api/* is served by the API worker via a zone route in prod
 // and the vite proxy in dev, so the Access cookie is attached automatically.
 const client = hc<AppType>('');
+type CrmQualityResponse = InferResponseType<
+  (typeof client.api.analytics)[':siteId']['stats']['crm-quality']['$get'],
+  200
+>;
 
 /** API failure carrying the HTTP status, so callers can distinguish an
  *  expired session (401) or a missing site (404) from a transient 5xx. */
@@ -83,6 +88,34 @@ function slugify(name: string): string {
 }
 
 export const api = {
+  async getQualityInsights(
+    siteId: string,
+    period: Period,
+    filters: AnalyticsFilters | undefined,
+    signal: AbortSignal
+  ): Promise<{ data: ReturnType<typeof buildAnalysisPackage> }> {
+    const response = await client.api.analytics[':siteId'].stats['quality-insights'].$get(
+      { param: { siteId }, query: { period, ...filters } },
+      { init: { signal } }
+    );
+    await assertOk(response);
+    return (await response.json()) as { data: ReturnType<typeof buildAnalysisPackage> };
+  },
+  async getCrmQuality(
+    siteId: string,
+    from: string,
+    to: string,
+    signal: AbortSignal
+  ): Promise<CrmQualityResponse> {
+    const response = await client.api.analytics[':siteId'].stats['crm-quality'].$get(
+      { param: { siteId }, query: { from, to } },
+      { init: { signal } }
+    );
+    await assertOk(response);
+    const value = await response.json();
+    if ('error' in value) throw new Error('CRM unavailable');
+    return value;
+  },
   async getQualityEvidence(
     siteId: string,
     period: Period,

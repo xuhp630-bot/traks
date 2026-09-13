@@ -146,6 +146,31 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
       '页面诊断有防刷上限；无错误不代表无故障；人工复核状态不包含在本分析包。',
     ],
     funnels: report.funnels,
+    business: {
+      denominator: 'selected_collector_sessions',
+      sessions: report.sessions.length,
+      pageviews: report.sessions.reduce((total, session) => total + session.pageviews, 0),
+      customEvents: report.sessions.reduce((total, session) => total + session.events, 0),
+      goals: (
+        [
+          'toolSuccessSessions',
+          'copySuccessSessions',
+          'saveSuccessSessions',
+          'pdfSuccessSessions',
+          'quoteHandoffSessions',
+          'acceptedRequestSessions',
+        ] as const
+      ).map(key => {
+        const sessions = report.acquisition.reduce((total, group) => total + group[key], 0);
+        return {
+          key,
+          sessions,
+          denominator: report.sessions.length,
+          rate: report.sessions.length ? sessions / report.sessions.length : null,
+        };
+      }),
+    },
+    entryFunnels: report.entryFunnels,
     acquisition: report.acquisition,
     growthCoverage: {
       attribution: 'first_observed_pageview_per_collector_session',

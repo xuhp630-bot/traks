@@ -3,6 +3,10 @@ import type { EvidenceEvent } from './quality';
 type GrowthSignal =
   | 'toolSuccessSessions'
   | 'resultUseSessions'
+  | 'copySuccessSessions'
+  | 'saveSuccessSessions'
+  | 'pdfSuccessSessions'
+  | 'quoteHandoffSessions'
   | 'contactStartedSessions'
   | 'contactSubmittedSessions'
   | 'contactFailedSessions'
@@ -46,6 +50,10 @@ export class GrowthAccumulator {
     if (action === 'calculator_submit_success') session.signals.add('toolSuccessSessions');
     if (['calculator_copy_success', 'export_pdf_success', 'save_project_success'].includes(action))
       session.signals.add('resultUseSessions');
+    if (action === 'calculator_copy_success') session.signals.add('copySuccessSessions');
+    if (action === 'save_project_success') session.signals.add('saveSuccessSessions');
+    if (action === 'export_pdf_success') session.signals.add('pdfSuccessSessions');
+    if (event.quoteHandoff) session.signals.add('quoteHandoffSessions');
     if (event.formKind !== 'contact') return;
     if (action === 'form_started') session.signals.add('contactStartedSessions');
     if (action === 'form_submitted') session.signals.add('contactSubmittedSessions');
@@ -77,6 +85,10 @@ export class GrowthAccumulator {
         versions: [],
         toolSuccessSessions: 0,
         resultUseSessions: 0,
+        copySuccessSessions: 0,
+        saveSuccessSessions: 0,
+        pdfSuccessSessions: 0,
+        quoteHandoffSessions: 0,
         contactStartedSessions: 0,
         contactSubmittedSessions: 0,
         contactFailedSessions: 0,
