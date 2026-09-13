@@ -144,3 +144,4 @@ Today使用live DO，历史窗口使用R2 SQL；不在来源失败时静默改�
 - `get_quality_insights` 中的 `crmConnected=false` 表示匿名分析包自身未连接业务身份；请独立调用新工具，不把两个不同人群的分母拼成顺序漏斗。
 - 保留 `deliveryCoverage`、来源、保留窗口和限制；邮件供应商受理≠送达≠阅读≠客户回复≠成交。首次保留的项目保存≠终身首访，账号留存≠访客/线索留存。
 - 网站侧实施与上线门槛见对应网站的 `docs/crm-followup.md`。配置成功不代表真实发信验收，生产标签也不保证真人。
+- API Worker 需启用 `global_fetch_strictly_public`，让目标站点请求按公网入口路由到其 Worker，而不是绕过 Worker 回到 origin；本地发布器、部署向导与Wrangler配置均保持一致。源站仍需专用只读token，不能以兼容标志替代鉴权。核验依据：Cloudflare Compatibility flags 文档，2026-09-13。

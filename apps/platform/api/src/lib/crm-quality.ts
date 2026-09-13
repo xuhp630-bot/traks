@@ -81,7 +81,7 @@ export async function readCrmQuality(
     redirect: 'error',
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error('CRM read failed');
+  if (!response.ok) throw new Error(`CRM upstream HTTP ${response.status}`);
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Empty CRM response');
   let size = 0;

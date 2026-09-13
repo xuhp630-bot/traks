@@ -1,7 +1,7 @@
 name = "traks-api-dev"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
 # Dashboard requests are back-end bound: each one makes several sequential hops
 # to D1, the live Durable Object and R2 SQL, none of which live at the edge.

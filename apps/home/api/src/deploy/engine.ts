@@ -630,7 +630,7 @@ export async function provisionInstance(ctx: EngineCtx): Promise<ProvisionResult
     await uploadWorker(ctx, cf, N.apiWorker, await ctx.artifacts.apiWorker(), {
       main_module: 'worker.js',
       compatibility_date: '2026-06-01',
-      compatibility_flags: ['nodejs_compat'],
+      compatibility_flags: ['nodejs_compat', 'global_fetch_strictly_public'],
       // Dashboard requests chain several hops to D1, the live DO and R2 SQL  -
       // none at the edge - so placing the worker near the data beats placing
       // it near the viewer. The collect worker deliberately stays at the edge.

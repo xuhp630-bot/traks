@@ -580,7 +580,7 @@ async function main() {
     uploadWorker(N.apiWorker, {
       main_module: 'worker.js',
       compatibility_date: '2026-06-01',
-      compatibility_flags: ['nodejs_compat'],
+      compatibility_flags: ['nodejs_compat', 'global_fetch_strictly_public'],
       placement: { mode: 'smart' },
       bindings: [
         { type: 'd1', name: 'DB', id: d1Id },

@@ -2208,8 +2208,15 @@ export const analyticsRoute = appWithBatch
       }
       try {
         return c.json(await readCrmQuality(c.env.CRM_QUALITY_INTEGRATIONS, site, window));
-      } catch {
-        return c.json({ error: 'CRM data unavailable; no business outcome may be inferred' }, 502);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        const reason = /^CRM upstream HTTP \d{3}$/.test(message)
+          ? message
+          : 'crm_contract_or_transport_error';
+        return c.json(
+          { error: 'CRM data unavailable; no business outcome may be inferred', reason },
+          502
+        );
       }
     }
   )
