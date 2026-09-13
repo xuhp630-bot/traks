@@ -121,10 +121,13 @@ export function buildEvidenceSelect(sourceSql: string, offset: number): string {
   return `WITH evidence_source AS (${sourceSql}), evidence_groups AS (
     SELECT ${EVIDENCE_COLUMNS}, COUNT(*) AS event_count
     FROM evidence_source GROUP BY ${EVIDENCE_COLUMNS}
-  ) SELECT *, COUNT(*) OVER () AS total_groups,
-    SUM(event_count) OVER () AS total_events
-    FROM evidence_groups ORDER BY ${EVIDENCE_COLUMNS}
-    LIMIT ${EVIDENCE_PAGE_SIZE + 1} OFFSET ${offset}`;
+  ), evidence_ranked AS (
+    SELECT *, COUNT(*) OVER () AS total_groups,
+      SUM(event_count) OVER () AS total_events,
+      ROW_NUMBER() OVER (ORDER BY ${EVIDENCE_COLUMNS}) AS evidence_row
+    FROM evidence_groups
+  ) SELECT * FROM evidence_ranked WHERE evidence_row > ${offset}
+    ORDER BY evidence_row LIMIT ${EVIDENCE_PAGE_SIZE + 1}`;
 }
 
 export function qualityPath(value: unknown): string {
