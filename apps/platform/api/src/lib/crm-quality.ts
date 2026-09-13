@@ -78,7 +78,7 @@ export async function readCrmQuality(
   url.search = new URLSearchParams(canonicalWindow).toString();
   const response = await fetcher(url, {
     headers: { authorization: `Bearer ${binding.token}` },
-    redirect: 'error',
+    redirect: 'manual',
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`CRM upstream HTTP ${response.status}`);
