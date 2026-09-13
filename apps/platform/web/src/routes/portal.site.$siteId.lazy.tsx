@@ -60,6 +60,7 @@ import { GoalsPanel } from '@/components/analytics/GoalsPanel';
 import { GoalFormModal, type GoalDef } from '@/components/analytics/GoalFormModal';
 import { GoalsDrawer } from '@/components/analytics/GoalsDrawer';
 import { EventsPathsExplorer } from '@/components/analytics/EventsPathsExplorer';
+import { QualityConsole } from '@/components/analytics/QualityConsole';
 import { FunnelFormModal } from '@/components/analytics/FunnelFormModal';
 import { FunnelsDrawer } from '@/components/analytics/FunnelsDrawer';
 import { FunnelsPanel } from '@/components/analytics/FunnelsPanel';
@@ -1603,6 +1604,12 @@ function SiteAnalyticsPage(): ReactElement {
             period={period}
           />
 
+          <QualityConsole
+            key={JSON.stringify([siteId, period, filters])}
+            siteId={siteId}
+            period={period}
+            filters={filters}
+          />
           <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
 
           {/* Pages + Sources */}

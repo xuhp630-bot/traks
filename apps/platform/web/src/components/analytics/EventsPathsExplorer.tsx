@@ -1599,8 +1599,8 @@ function PathsView({
       <div>
         <h3 className="text-[15px] font-bold tracking-[-0.01em] text-[#3D3B4F]">User Paths</h3>
         <p className="mt-0.5 text-[12px] text-[#9B9590]">
-          {sessions.length} sessions · click a session to replay its full pageview and event
-          timeline.
+          Latest {sessions.length} sessions (maximum 100); timelines show at most 500 events. Paths
+          are Top 10 per kind. Use Traffic quality for complete session-summary exports.
         </p>
       </div>
       <div className="relative w-full sm:w-72">

@@ -1,0 +1,6 @@
+interface:
+  display_name: '网站埋点与数据优化闭环'
+  short_description: '盘点网站全流程埋点与失败分支，隔离QA并读取真实数据，形成可验证优化需求'
+  default_prompt: '使用 $site-analytics-optimization，先理解当前网站的目标，再调研埋点与数据缺口，决策后执行授权范围内的接入、验证和优化复查。'
+policy:
+  allow_implicit_invocation: true

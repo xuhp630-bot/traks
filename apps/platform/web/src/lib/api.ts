@@ -1,6 +1,6 @@
 import { hc } from 'hono/client';
 import type { AppType } from '@traks/platform-api';
-import type { Period } from '@traks/shared';
+import type { Period, EvidencePage } from '@traks/shared';
 import { authClient } from '@/lib/auth-client';
 
 /** Click-to-filter params, passed through to the analytics endpoints. */
@@ -83,6 +83,23 @@ function slugify(name: string): string {
 }
 
 export const api = {
+  async getQualityEvidence(
+    siteId: string,
+    period: Period,
+    filters: AnalyticsFilters | undefined,
+    cursor: string | undefined,
+    signal: AbortSignal
+  ): Promise<EvidencePage> {
+    const response = await client.api.analytics[':siteId'].stats['quality-evidence'].$get(
+      {
+        param: { siteId },
+        query: { period, ...filters, cursor },
+      },
+      { init: { signal } }
+    );
+    await assertOk(response);
+    return (await response.json()) as EvidencePage;
+  },
   // Current user
   async getMe(): Promise<any> {
     const res = await client.api.me.$get();

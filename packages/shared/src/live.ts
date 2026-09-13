@@ -325,6 +325,12 @@ export interface LiveDashboard {
 
 /** RPC surface of SiteLiveStore. All ranges are [fromMs, toMs) epoch ms. */
 export interface LiveStoreApi {
+  qualityEvidence(
+    fromMs: number,
+    toMs: number,
+    offset: number,
+    filters?: LiveFilters
+  ): Promise<Record<string, unknown>[]>;
   /** Stores the event and returns the site's event count for its calendar month (site tz) - used for quota enforcement. */
   record(event: LiveEvent): Promise<number>;
   /** Wipes all stored data for this site (site deletion). */

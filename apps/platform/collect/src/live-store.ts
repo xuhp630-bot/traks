@@ -35,6 +35,7 @@ import {
   escapeLike,
   isPagePrefix,
   propLikePatterns,
+  buildEvidenceSelect,
 } from '@traks/shared';
 
 // "Today" plus the full previous-day comparison window needs at most 48h in
@@ -110,6 +111,33 @@ const n = (v: unknown): number => Number(v ?? 0) || 0;
  * are served from Iceberg/R2 SQL instead.
  */
 export class SiteLiveStore extends DurableObject<unknown> {
+  async qualityEvidence(
+    fromMs: number,
+    toMs: number,
+    offset: number,
+    filters?: LiveFilters
+  ): Promise<Record<string, unknown>[]> {
+    if (
+      !Number.isFinite(fromMs) ||
+      !Number.isFinite(toMs) ||
+      fromMs < Date.now() - RETENTION_MS ||
+      toMs > Date.now() ||
+      fromMs >= toMs
+    )
+      throw new Error('Evidence window outside live retention');
+    const filter = SiteLiveStore.filterSql(filters);
+    const bounds = "event_type IN ('pageview', 'event') AND ts >= ? AND ts < ?";
+    const cohort = filter.sql
+      ? `AND session_id IN (SELECT DISTINCT session_id FROM events WHERE ${bounds}${filter.sql})`
+      : '';
+    const params = filter.sql ? [fromMs, toMs, fromMs, toMs, ...filter.params] : [fromMs, toMs];
+    return this.sql
+      .exec(
+        buildEvidenceSelect(`SELECT * FROM events WHERE ${bounds} ${cohort}`, offset),
+        ...params
+      )
+      .toArray();
+  }
   private sql: SqlStorage;
   private buffer: LiveEvent[] = [];
   /** In-memory running monthly counters (authoritative between flushes). */

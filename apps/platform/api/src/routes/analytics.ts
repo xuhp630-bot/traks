@@ -17,6 +17,9 @@ import {
   type LiveFilters,
   type LiveRealtimeLocation,
   toLiveFilters,
+  buildQualityEvidenceQuery,
+  EVIDENCE_PAGE_SIZE,
+  normalizeEvidence,
 } from '@traks/shared';
 import { requireAuth } from '../middleware/auth';
 import { cacheTtlSeconds, freshTtlSeconds } from '../lib/cache-ttl';
@@ -392,6 +395,18 @@ const sessionQuery = z.object({
   sessionId: z.string().min(1).max(256),
   ...filterFields,
 });
+const evidenceQuery = periodQuery.extend({ cursor: z.string().max(1500).optional() });
+const evidenceCursor = z
+  .object({
+    scope: z.string().regex(/^[a-f0-9]{64}$/),
+    issuedAt: z.number().int().nonnegative(),
+    from: z.number().int().nonnegative(),
+    to: z.number().int().nonnegative(),
+    offset: z.number().int().positive().max(1_000_000_000),
+    totalGroups: z.number().int().nonnegative(),
+    totalEvents: z.number().int().nonnegative(),
+  })
+  .strict();
 const utmQuery = z.object({
   period: z.enum(PERIODS).default('today'),
   type: z.enum(['source', 'medium', 'campaign']).default('source'),
@@ -2054,6 +2069,109 @@ export const analyticsRoute = appWithBatch
       data: aggregateMetaProps(outcome.map(r => ({ meta: r.meta, events: toNumber(r.events) }))),
     });
   })
+
+  .get(
+    '/:siteId/stats/quality-evidence',
+    requireAuth,
+    validate('query', evidenceQuery),
+    async c => {
+      const siteId = c.req.param('siteId');
+      const site = await getSite(c, siteId, c.get('userId')!);
+      if (!site) return c.json({ error: 'Not found' }, 404);
+      const query = c.req.valid('query');
+      const filters = parseFilters(query);
+      const scope = await sha256Hex(JSON.stringify([siteId, query.period, site.timezone, filters]));
+      let cursor: z.infer<typeof evidenceCursor> | undefined;
+      if (query.cursor) {
+        try {
+          cursor = evidenceCursor.parse(JSON.parse(atob(query.cursor)));
+        } catch {
+          return c.json({ error: 'Invalid evidence cursor' }, 400);
+        }
+        if (
+          cursor.scope !== scope ||
+          cursor.issuedAt > Date.now() ||
+          Date.now() - cursor.issuedAt > 30 * 60 * 1000
+        ) {
+          return c.json(
+            { error: 'Evidence cursor expired or scope changed. Restart the scan.' },
+            409
+          );
+        }
+      }
+      const issuedAt = cursor?.issuedAt ?? Date.now();
+      const source = query.period === 'today' ? 'live' : 'historical';
+      const range = resolvePeriod(query.period, new Date(issuedAt), site.timezone);
+      const from = ms(range.from);
+      const to = Math.min(ms(range.to), issuedAt - (source === 'live' ? 5000 : 90_000));
+      if (
+        cursor &&
+        (cursor.from !== from || cursor.to !== to || cursor.offset >= cursor.totalGroups)
+      )
+        return c.json({ error: 'Invalid evidence window' }, 400);
+      if (to <= from)
+        return c.json({ error: 'The reporting window is not ready yet. Retry shortly.' }, 409);
+      range.to = new Date(to).toISOString();
+      const offset = cursor?.offset ?? 0;
+      let rows: Record<string, unknown>[];
+      try {
+        if (source === 'live') {
+          rows = await liveStore(c, siteId).qualityEvidence(from, to, offset, filters);
+        } else {
+          const build = buildQualityEvidenceQuery(siteId, range, offset, filters);
+          try {
+            rows = (await queryR2SqlWithStats(getQueryConfig(c), build)).rows;
+          } catch (error) {
+            if (!isMissingIngestTs(error)) throw error;
+            setIngestPrune(false);
+            rows = (await queryR2SqlWithStats(getQueryConfig(c), build)).rows;
+          }
+        }
+      } catch {
+        return c.json(
+          { error: 'Evidence scan failed. No partial export is available; restart the scan.' },
+          502
+        );
+      }
+      const totalGroups = Number(rows[0]?.total_groups ?? 0);
+      const totalEvents = Number(rows[0]?.total_events ?? 0);
+      if (!Number.isSafeInteger(totalGroups) || !Number.isSafeInteger(totalEvents))
+        return c.json({ error: 'Evidence totals exceed supported precision' }, 502);
+      if (cursor && (totalGroups !== cursor.totalGroups || totalEvents !== cursor.totalEvents)) {
+        return c.json(
+          { error: 'Evidence changed while paging. Restart to avoid an incomplete export.' },
+          409
+        );
+      }
+      const data = rows.slice(0, EVIDENCE_PAGE_SIZE).map(normalizeEvidence);
+      const scannedGroups = offset + data.length;
+      const nextCursor =
+        scannedGroups < totalGroups
+          ? btoa(
+              JSON.stringify({
+                scope,
+                issuedAt,
+                from,
+                to,
+                offset: scannedGroups,
+                totalGroups,
+                totalEvents,
+              })
+            )
+          : null;
+      c.header('Cache-Control', 'private, no-store');
+      return c.json({
+        data,
+        nextCursor,
+        totalGroups,
+        totalEvents,
+        scannedGroups,
+        from,
+        to,
+        source,
+      });
+    }
+  )
 
   .get('/:siteId/stats/sessions', requireAuth, validate('query', periodQuery), async c => {
     const userId = c.get('userId')!;
