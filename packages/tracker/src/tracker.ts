@@ -284,31 +284,38 @@
     };
   }
 
-  const modelContext = (document as any).modelContext || (navigator as any).modelContext;
-  if (modelContext && typeof modelContext.registerTool === 'function') {
-    const originalRegisterTool = modelContext.registerTool;
-    modelContext.registerTool = function (tool: any, ...rest: unknown[]) {
-      try {
-        wrapTool(tool);
-      } catch {
-        /* never interfere with the page's tool registration */
+  function instrumentModelContext(): void {
+    try {
+      const modelContext = (document as any).modelContext || (navigator as any).modelContext;
+      if (modelContext && typeof modelContext.registerTool === 'function') {
+        const originalRegisterTool = modelContext.registerTool;
+        modelContext.registerTool = function (tool: any, ...rest: unknown[]) {
+          try {
+            wrapTool(tool);
+          } catch {
+            /* never interfere with the page's tool registration */
+          }
+          return originalRegisterTool.call(this, tool, ...rest);
+        };
       }
-      return originalRegisterTool.call(this, tool, ...rest);
-    };
-  }
-  if (modelContext && typeof modelContext.provideContext === 'function') {
-    const originalProvideContext = modelContext.provideContext;
-    modelContext.provideContext = function (context: any, ...rest: unknown[]) {
-      try {
-        if (context && Array.isArray(context.tools)) {
-          for (let i = 0; i < context.tools.length; i++) wrapTool(context.tools[i]);
-        }
-      } catch {
-        /* never interfere with the page's tool registration */
+      if (modelContext && typeof modelContext.provideContext === 'function') {
+        const originalProvideContext = modelContext.provideContext;
+        modelContext.provideContext = function (context: any, ...rest: unknown[]) {
+          try {
+            if (context && Array.isArray(context.tools)) {
+              for (let i = 0; i < context.tools.length; i++) wrapTool(context.tools[i]);
+            }
+          } catch {
+            /* never interfere with the page's tool registration */
+          }
+          return originalProvideContext.call(this, context, ...rest);
+        };
       }
-      return originalProvideContext.call(this, context, ...rest);
-    };
+    } catch {
+      return;
+    }
   }
+  instrumentModelContext();
 
   if (useHash) {
     window.addEventListener('hashchange', function () {

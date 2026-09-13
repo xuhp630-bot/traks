@@ -270,3 +270,16 @@ not send messages, collect contact lists or create consent.
 reads the migration ledger and stops if any migration is pending. It never
 applies a migration, creates those resources or writes secrets/claim tokens.
 Worker/assets uploads and the existing minute prewarm cron remain release writes.
+
+## Read-only browser tool registries
+
+Production QA on September 13 exposed a tracker initialization error when a
+browser provides a read-only WebMCP `registerTool`. Optional tool auto-tracking
+must not prevent native pageviews, SPA tracking or regular custom events. The
+registry probe/patch is now isolated: denied writes or throwing getters skip
+optional WebMCP wrapping and leave the remaining tracker initialization running.
+Writable registries retain their original return values, exceptions and tool
+call reporting. Frozen tool definitions remain usable without being instrumented.
+Verify the generated inline `/t.js` copy as well as the TypeScript source.
+This fixes an evidenced browser compatibility issue; it does not retrospectively
+explain or relabel all historical unknown traffic.
