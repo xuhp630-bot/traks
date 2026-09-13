@@ -17,6 +17,7 @@ const report = z.object({
   to: z.string().datetime(),
   generatedAt: z.string().datetime(),
   crmConnected: z.literal(true),
+  followupSendingEnabled: z.boolean(),
   population: z.literal('production_labeled_requests_not_verified_humans'),
   counts,
   deliveryCoverage: z.enum(['configured_not_proof_of_receipt', 'not_configured']),
