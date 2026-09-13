@@ -89,6 +89,25 @@ const evidenceProps = {
 
 const TOOLS: ToolDef[] = [
   {
+    name: 'get_crm_quality',
+    description:
+      'Read independent server-confirmed CRM aggregates for an authorized site: request-only permission, owner-qualified requests, actual follow-up acceptance, signed delivery/failure receipts, owner-confirmed replies and mature verified-account project-save retention. No contact data, no sending, no CRM writes. Requires a server-side site binding; not_connected is not zero. No anonymous-session/UTM join; automatic inbound replies remain unconnected. Explicit completed UTC window within 90 days.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        siteId: str('Authorized site id'),
+        from: str('Inclusive UTC ISO timestamp'),
+        to: str('Exclusive UTC ISO timestamp, not in the future'),
+      },
+      required: ['siteId', 'from', 'to'],
+      additionalProperties: false,
+    },
+    request: args => ({
+      method: 'GET',
+      path: `/api/analytics/${encodeURIComponent(String(args.siteId))}/stats/crm-quality?${new URLSearchParams({ from: String(args.from), to: String(args.to) })}`,
+    }),
+  },
+  {
     name: 'list_sites',
     description:
       'List the sites this token can access (id, name, domain, timezone). Site ids are the handle every other tool takes.',
@@ -415,6 +434,15 @@ export function mcpHandler(dispatch: Dispatch) {
               name: t.name,
               description: t.description,
               inputSchema: t.inputSchema,
+              ...(t.name === 'get_crm_quality'
+                ? {
+                    annotations: {
+                      readOnlyHint: true,
+                      destructiveHint: false,
+                      idempotentHint: true,
+                    },
+                  }
+                : {}),
             })),
           })
         );
@@ -422,6 +450,25 @@ export function mcpHandler(dispatch: Dispatch) {
         const tool = TOOLS.find(t => t.name === params?.name);
         if (!tool) return c.json(rpcError(id, -32602, `Unknown tool: ${String(params?.name)}`));
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
+        if (
+          tool.inputSchema.additionalProperties === false &&
+          Object.keys(args).some(key => !Object.hasOwn(tool.inputSchema.properties as object, key))
+        ) {
+          return c.json(
+            rpcResult(id, {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    error:
+                      'Unsupported arguments; CRM evidence does not accept anonymous-session filters',
+                  }),
+                },
+              ],
+            })
+          );
+        }
         // Name the missing argument instead of letting 'undefined' reach a
         // route and come back as a misleading bare 404.
         const required = (tool.inputSchema.required ?? []) as string[];

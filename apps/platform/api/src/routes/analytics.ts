@@ -26,6 +26,7 @@ import {
   buildAnalysisPackage,
 } from '@traks/shared';
 import { requireAuth } from '../middleware/auth';
+import { readCrmQuality } from '../lib/crm-quality';
 import { cacheTtlSeconds, freshTtlSeconds } from '../lib/cache-ttl';
 import { noteSiteView, INTERNAL_HEADER, getInternalToken } from '../lib/prewarm';
 import { siteAccessFilter } from '../lib/workspaces';
@@ -90,10 +91,14 @@ interface SiteRecord {
  * timezone after a settings change. It is one indexed D1 read, negligible
  * beside the R2 SQL scan every caller goes on to make.
  */
-async function getSite(c: AppContext, siteId: string, userId: string): Promise<SiteRecord | null> {
+async function getSite(
+  c: AppContext,
+  siteId: string,
+  userId: string
+): Promise<(SiteRecord & { domain: string }) | null> {
   const db = c.get('db')!;
   const [result] = await db
-    .select({ siteId: sites.id, timezone: sites.timezone })
+    .select({ siteId: sites.id, timezone: sites.timezone, domain: sites.domain })
     .from(sites)
     .where(and(eq(sites.id, siteId), siteAccessFilter(db, userId, c.get('tokenWorkspaceId'))))
     .limit(1);
@@ -2176,6 +2181,36 @@ export const analyticsRoute = appWithBatch
         to,
         source,
       });
+    }
+  )
+
+  .get(
+    '/:siteId/stats/crm-quality',
+    requireAuth,
+    validate(
+      'query',
+      z
+        .object({
+          from: z.string().datetime(),
+          to: z.string().datetime(),
+        })
+        .strict()
+    ),
+    async c => {
+      c.header('Cache-Control', 'private, no-store');
+      const site = await getSite(c, c.req.param('siteId'), c.get('userId')!);
+      if (!site) return c.json({ error: 'Not found' }, 404);
+      const window = c.req.valid('query');
+      const from = Date.parse(window.from);
+      const to = Date.parse(window.to);
+      if (from >= to || to > Date.now() || from < Date.now() - 90 * 86_400_000) {
+        return c.json({ error: 'Use a completed UTC window within the last 90 days' }, 400);
+      }
+      try {
+        return c.json(await readCrmQuality(c.env.CRM_QUALITY_INTEGRATIONS, site, window));
+      } catch {
+        return c.json({ error: 'CRM data unavailable; no business outcome may be inferred' }, 502);
+      }
     }
   )
 

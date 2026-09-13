@@ -157,6 +157,8 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
       customerReplies: null,
       crossDayRetention: null,
       crmConnected: false,
+      crmEvidenceTool: 'get_crm_quality',
+      crmScope: 'independent_business_aggregate_not_joined_to_anonymous_sessions',
     },
     operations: report.operations,
     behaviors: report.behaviors,

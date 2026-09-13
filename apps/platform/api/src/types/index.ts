@@ -1,4 +1,5 @@
 export type Bindings = {
+  CRM_QUALITY_INTEGRATIONS?: string;
   DB: D1Database;
   /** Static assets (web SPA); absent in local dev where vite serves the SPA. */
   ASSETS?: Fetcher;
