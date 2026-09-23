@@ -1,7 +1,12 @@
 import { hc, type InferResponseType } from 'hono/client';
 import type { AppType } from '@traks/platform-api';
 import type { Period, EvidencePage } from '@traks/shared';
-import type { CompetitorReport, CompetitorCheck } from '@traks/shared';
+import type {
+  CompetitorReport,
+  CompetitorCheck,
+  CompetitorCategory,
+  CompetitorFilters,
+} from '@traks/shared';
 import type { buildAnalysisPackage } from '@traks/shared';
 import { authClient } from '@/lib/auth-client';
 
@@ -88,29 +93,47 @@ function slugify(name: string): string {
   return `${base || 'workspace'}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+type CompetitorScope = string | ({ workspaceId: string } & CompetitorFilters);
+const competitorRoot = (scope: CompetitorScope): string =>
+  typeof scope === 'string'
+    ? `/api/competitors/${encodeURIComponent(scope)}`
+    : `/api/competitors/workspaces/${encodeURIComponent(scope.workspaceId)}`;
+
 export const api = {
-  async getCompetitors(siteId: string): Promise<{ data: CompetitorReport }> {
-    const response = await fetch(`/api/competitors/${encodeURIComponent(siteId)}`);
+  async getCompetitorCategories(
+    workspaceId: string
+  ): Promise<{ data: { categories: CompetitorCategory[]; canManage: boolean; limit: number } }> {
+    const response = await fetch(`${competitorRoot({ workspaceId })}/categories`);
+    await assertOk(response);
+    return response.json();
+  },
+  async getCompetitors(scope: CompetitorScope): Promise<{ data: CompetitorReport }> {
+    const filters = new URLSearchParams();
+    if (typeof scope !== 'string') {
+      if (scope.siteId) filters.set('siteId', scope.siteId);
+      if (scope.categoryId) filters.set('categoryId', scope.categoryId);
+    }
+    const response = await fetch(`${competitorRoot(scope)}${filters.size ? `?${filters}` : ''}`);
     await assertOk(response);
     return response.json();
   },
   async getCompetitorHistory(
-    siteId: string,
+    scope: CompetitorScope,
     monitorId: string
   ): Promise<{ data: { checks: CompetitorCheck[] } }> {
     const response = await fetch(
-      `/api/competitors/${encodeURIComponent(siteId)}/${encodeURIComponent(monitorId)}/history`
+      `${competitorRoot(scope)}/${encodeURIComponent(monitorId)}/history`
     );
     await assertOk(response);
     return response.json();
   },
   async mutateCompetitor(
-    siteId: string,
+    scope: CompetitorScope,
     suffix: string,
     method: 'POST' | 'PATCH' | 'DELETE',
     body?: object
   ): Promise<unknown> {
-    const response = await fetch(`/api/competitors/${encodeURIComponent(siteId)}${suffix}`, {
+    const response = await fetch(`${competitorRoot(scope)}${suffix}`, {
       method,
       ...(body
         ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }

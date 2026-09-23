@@ -1,7 +1,15 @@
 import { and, eq, inArray, isNull, lt, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import { createId } from '@paralleldrive/cuid2';
-import { apiKeys, sites, users, workspaceMembers, workspaces } from '../db/schema';
+import {
+  apiKeys,
+  sites,
+  users,
+  workspaceMembers,
+  workspaces,
+  competitorMonitors,
+  competitorCategories,
+} from '../db/schema';
 
 export const DEFAULT_WORKSPACE_NAME = 'My Workspace';
 
@@ -98,6 +106,24 @@ export function siteManageFilter(
 
 type MembershipRow = typeof workspaceMembers.$inferSelect;
 
+export async function workspaceHasCompetitors(
+  db: DrizzleD1Database,
+  workspaceId: string
+): Promise<boolean> {
+  const monitors = await db
+    .select({ id: competitorMonitors.id })
+    .from(competitorMonitors)
+    .where(eq(competitorMonitors.workspaceId, workspaceId))
+    .limit(1);
+  if (monitors.length) return true;
+  const categories = await db
+    .select({ id: competitorCategories.id })
+    .from(competitorCategories)
+    .where(eq(competitorCategories.workspaceId, workspaceId))
+    .limit(1);
+  return categories.length > 0;
+}
+
 export async function getMembership(
   db: DrizzleD1Database,
   workspaceId: string,
@@ -186,8 +212,6 @@ export async function evictOrphanedMembers(db: DrizzleD1Database): Promise<void>
         notInArray(users.id, db.select({ id: workspaceMembers.userId }).from(workspaceMembers))
       )
     );
-  if (orphans.length === 0) return;
-
   const [owner] = await db
     .select({ id: users.id })
     .from(users)
@@ -226,7 +250,7 @@ export async function evictOrphanedMembers(db: DrizzleD1Database): Promise<void>
       .select({ n: sql<number>`count(*)` })
       .from(sites)
       .where(eq(sites.workspaceId, ws.id));
-    if (Number(n) === 0) {
+    if (Number(n) === 0 && !(await workspaceHasCompetitors(db, ws.id))) {
       await db.delete(workspaces).where(eq(workspaces.id, ws.id));
     } else if (owner) {
       await db

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
+import { drizzle } from 'drizzle-orm/d1';
 import { competitorInput, type CompetitorSnapshot } from '../packages/shared/src/competitors';
 import {
   publicPageUrl,
@@ -20,6 +21,10 @@ import {
 } from '../apps/platform/api/src/lib/competitors';
 import { hashToken } from '../apps/platform/api/src/lib/tokens';
 import type { Bindings } from '../apps/platform/api/src/types';
+import {
+  evictOrphanedMembers,
+  workspaceHasCompetitors,
+} from '../apps/platform/api/src/lib/workspaces';
 
 let runtime: Miniflare;
 let database: Bindings['DB'];
@@ -58,7 +63,7 @@ before(async () => {
     ],
     compatibilityDate: '2026-07-02',
     compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
-    d1Databases: ['DB'],
+    d1Databases: ['DB', 'LEGACY_DB'],
     bindings: {
       ENVIRONMENT: 'development',
       BETTER_AUTH_SECRET: 'local-fixture-only-not-a-production-secret',
@@ -120,6 +125,7 @@ after(async () => {
 });
 beforeEach(async () => {
   await database.prepare('DELETE FROM competitor_monitors').run();
+  await database.prepare('DELETE FROM competitor_categories').run();
 });
 
 async function monitor(
@@ -591,8 +597,10 @@ test('MCP competitor tools are scoped read-only views and never start a check', 
   ).json();
   const tools = list.result.tools.filter(tool => tool.name.includes('competitor'));
   assert.deepEqual(tools.map(tool => tool.name).sort(), [
+    'get_competitor_categories',
     'get_competitor_history',
     'get_competitor_monitors',
+    'list_competitor_workspaces',
   ]);
   assert.ok(tools.every(tool => tool.annotations.readOnlyHint));
   for (const [name, argumentsValue] of [
@@ -632,4 +640,468 @@ test('MCP competitor tools are scoped read-only views and never start a check', 
     assert.equal(result.result.isError, true);
   }
   assert.deepEqual(await competitorHistory(database, 'monitor'), []);
+});
+
+test('0031 preserves legacy monitors, snapshots, successful baselines and FK behavior without disabling foreign keys', async () => {
+  const legacy = (await runtime.getD1Database('LEGACY_DB')) as unknown as Bindings['DB'];
+  const folder = 'apps/platform/api/src/db/migrations';
+  for (const filename of (await readdir(folder))
+    .filter(name => name.endsWith('.sql') && name < '0031')
+    .sort()) {
+    const statements = (await readFile(`${folder}/${filename}`, 'utf8'))
+      .split('--> statement-breakpoint')
+      .map(part => part.trim())
+      .filter(Boolean);
+    for (const statement of statements) await legacy.prepare(statement).run();
+  }
+  await legacy.batch([
+    legacy.prepare("INSERT INTO users (id, email) VALUES ('legacy-owner','legacy@fixture.test')"),
+    legacy.prepare(
+      "INSERT INTO workspaces (id,name,slug) VALUES ('legacy-workspace','Legacy','legacy')"
+    ),
+    legacy.prepare(
+      "INSERT INTO sites (id,user_id,workspace_id,name,domain) VALUES ('old-site','legacy-owner',NULL,'Legacy','legacy.fixture.test'),('linked-site','legacy-owner','legacy-workspace','Linked','linked.fixture.test')"
+    ),
+    legacy
+      .prepare(
+        "INSERT INTO competitor_monitors (id,site_id,name,url,hostname,selector,cadence,created_at,next_check_at,last_checked_at,last_success_at,last_success_snapshot,lease_until) VALUES ('old','old-site','Old','https://fixture.example.com/','fixture.example.com','main','daily',10,50,40,30,?,60),('linked','linked-site','Linked','https://fixture.example.com/','fixture.example.com','main','weekly',10,70,40,30,?,0)"
+      )
+      .bind(JSON.stringify(snapshot), JSON.stringify(snapshot)),
+    legacy
+      .prepare(
+        "INSERT INTO competitor_snapshots (id,monitor_id,checked_at,status,error_code,http_status,snapshot,previous,previous_checked_at,changes) VALUES ('old-check','old',30,'baseline',NULL,200,?,NULL,NULL,'[]'),('failure','old',40,'error','http_error',503,NULL,NULL,NULL,'[]'),('linked-check','linked',40,'changed',NULL,200,?,?,30,'[\"title\"]')"
+      )
+      .bind(
+        JSON.stringify(snapshot),
+        JSON.stringify({ ...snapshot, title: 'Changed' }),
+        JSON.stringify(snapshot)
+      ),
+  ]);
+  const monitorsBefore = (
+    await legacy.prepare('SELECT * FROM competitor_monitors ORDER BY id').all()
+  ).results;
+  const checksBefore = (
+    await legacy.prepare('SELECT * FROM competitor_snapshots ORDER BY id').all()
+  ).results;
+  const migration = await readFile(`${folder}/0031_competitor_categories.sql`, 'utf8');
+  assert.doesNotMatch(migration, /foreign_keys\s*=\s*OFF/i);
+  await legacy.batch(
+    migration
+      .split('--> statement-breakpoint')
+      .map(part => part.trim())
+      .filter(Boolean)
+      .map(statement => legacy.prepare(statement))
+  );
+  assert.deepEqual(
+    (await legacy.prepare('SELECT * FROM competitor_snapshots ORDER BY id').all()).results,
+    checksBefore
+  );
+  assert.deepEqual(
+    (await legacy.prepare('SELECT * FROM competitor_monitors ORDER BY id').all()).results.map(
+      ({ workspace_id, category_id, ...row }) => {
+        assert.equal(workspace_id, null);
+        assert.equal(category_id, null);
+        return row;
+      }
+    ),
+    monitorsBefore
+  );
+  assert.deepEqual((await legacy.prepare('PRAGMA foreign_key_check').all()).results, []);
+  await legacy.prepare("DELETE FROM sites WHERE id = 'old-site'").run();
+  assert.deepEqual(
+    (await legacy.prepare('SELECT id FROM competitor_snapshots ORDER BY id').all()).results,
+    [{ id: 'linked-check' }]
+  );
+  await assert.rejects(() =>
+    legacy
+      .prepare(
+        "INSERT INTO competitor_monitors (id,name,url,hostname,selector,created_at) VALUES ('bad','bad','https://fixture.example.com/bad','fixture.example.com','main',0)"
+      )
+      .run()
+  );
+});
+
+const workspaceRoot = '/api/competitors/workspaces/workspace';
+async function category(name = 'AI tools') {
+  const response = await request(`${workspaceRoot}/categories`, 'POST', { name });
+  assert.equal(response.status, 201);
+  return (await response.json()).data.id as string;
+}
+async function independent(extra: object = {}) {
+  const response = await request(workspaceRoot, 'POST', {
+    name: 'Independent',
+    url: 'https://fixture.example.com/independent',
+    ...extra,
+  });
+  assert.equal(response.status, 201);
+  return (await response.json()).data.id as string;
+}
+
+test('category rename/delete and same-workspace reassignment preserve all evidence and the success baseline', async () => {
+  const categoryId = await category();
+  const id = await independent({ categoryId });
+  await checkCompetitor(env, id, { workspaceId: 'workspace' }, success, instant);
+  const before = await competitorHistory(database, id);
+  assert.equal(
+    (await request(`${workspaceRoot}/categories/${categoryId}`, 'PATCH', { name: 'AI video' }))
+      .status,
+    200
+  );
+  for (const siteId of ['site', 'other-site', null]) {
+    assert.equal((await request(`${workspaceRoot}/${id}`, 'PATCH', { siteId })).status, 200);
+    assert.deepEqual(await competitorHistory(database, id), before);
+    const regrouped = await competitorReport(
+      env,
+      { workspaceId: 'workspace', siteId: siteId ?? 'unlinked', categoryId },
+      true
+    );
+    assert.equal(
+      regrouped.trend.reduce((total, day) => total + day.checks, 0),
+      1
+    );
+    const previousGroup = await competitorReport(
+      env,
+      { workspaceId: 'workspace', siteId: siteId === 'site' ? 'unlinked' : 'site', categoryId },
+      true
+    );
+    assert.equal(
+      previousGroup.trend.reduce((total, day) => total + day.checks, 0),
+      0
+    );
+    const row = await database
+      .prepare(
+        'SELECT site_id, workspace_id, last_success_snapshot, next_check_at FROM competitor_monitors WHERE id=?'
+      )
+      .bind(id)
+      .first();
+    assert.equal(row?.site_id, siteId);
+    assert.equal(row?.workspace_id, siteId ? null : 'workspace');
+    assert.equal(row?.last_success_snapshot, JSON.stringify(snapshot));
+    assert.equal(row?.next_check_at, null);
+  }
+  assert.equal((await request(`${workspaceRoot}/categories/${categoryId}`, 'DELETE')).status, 200);
+  assert.deepEqual(await competitorHistory(database, id), before);
+  const report = (
+    await (await request(`${workspaceRoot}?categoryId=uncategorized&siteId=unlinked`)).json()
+  ).data;
+  assert.deepEqual(
+    report.monitors.map(item => item.id),
+    [id]
+  );
+  assert.equal(report.monitors[0].categoryId, null);
+  assert.equal(report.monitors[0].latest.status, 'baseline');
+  assert.equal((await request(`${workspaceRoot}/${id}`, 'PATCH', {})).status, 400);
+  assert.equal(
+    (await request(`/api/competitors/site/${id}`, 'PATCH', { siteId: null })).status,
+    400
+  );
+});
+
+test('workspace API rejects cross-tenant sites, categories, monitors and token access; members and read PATs cannot write', async () => {
+  const categoryId = await category();
+  const id = await independent({ categoryId });
+  await database
+    .prepare(
+      "INSERT INTO competitor_categories (id,workspace_id,name,name_key,created_at) VALUES ('outside-category','outside','Outside','outside',0)"
+    )
+    .run();
+  await monitor('outside-monitor', 'outside.fixture.test', 'manual', null, 'outside-site');
+  assert.equal((await request(workspaceRoot, 'GET', undefined, '')).status, 401);
+  assert.equal((await request('/api/competitors/workspaces/outside')).status, 404);
+  const workspaces = (await (await request('/api/competitors/workspaces')).json()).data;
+  assert.deepEqual(
+    workspaces.map(item => item.id),
+    ['workspace']
+  );
+  for (const filters of [
+    'siteId=outside-site',
+    'categoryId=outside-category',
+    'categoryId=missing',
+    'siteId=missing',
+  ])
+    assert.equal((await request(`${workspaceRoot}?${filters}`)).status, 404);
+  for (const filters of ['siteId=', 'categoryId=', 'bad=true'])
+    assert.equal((await request(`${workspaceRoot}?${filters}`)).status, 400);
+  for (const body of [{ siteId: 'outside-site' }, { categoryId: 'outside-category' }]) {
+    assert.equal(
+      (
+        await request(workspaceRoot, 'POST', {
+          name: 'Wrong',
+          url: 'https://fixture.example.com/wrong',
+          ...body,
+        })
+      ).status,
+      404
+    );
+    assert.equal((await request(`${workspaceRoot}/${id}`, 'PATCH', body)).status, 404);
+  }
+  for (const suffix of ['history', 'check'])
+    assert.equal(
+      (
+        await request(
+          `${workspaceRoot}/outside-monitor/${suffix}`,
+          suffix === 'history' ? 'GET' : 'POST'
+        )
+      ).status,
+      404
+    );
+  for (const token of ['member', 'reader']) {
+    assert.equal(
+      (await (await request(workspaceRoot, 'GET', undefined, token)).json()).data.canManage,
+      false
+    );
+    for (const [path, method, body] of [
+      [workspaceRoot, 'POST', { name: 'Wrong', url: 'https://fixture.example.com/wrong' }],
+      [`${workspaceRoot}/${id}`, 'PATCH', { categoryId: null }],
+      [`${workspaceRoot}/${id}/check`, 'POST', undefined],
+      [`${workspaceRoot}/${id}`, 'DELETE', undefined],
+      [`${workspaceRoot}/categories`, 'POST', { name: 'Wrong' }],
+      [`${workspaceRoot}/categories/${categoryId}`, 'PATCH', { name: 'Wrong' }],
+      [`${workspaceRoot}/categories/${categoryId}`, 'DELETE', undefined],
+    ] as const)
+      assert.equal((await request(path, method, body, token)).status, 403);
+  }
+  assert.equal(
+    (await request(`${workspaceRoot}/categories/outside-category`, 'DELETE')).status,
+    404
+  );
+});
+
+test('normalized categories, URL uniqueness and concurrent limits cannot be bypassed by changing category', async () => {
+  const categoryId = await category('ＡＩ');
+  assert.equal(
+    (await request(`${workspaceRoot}/categories`, 'POST', { name: ' ai ' })).status,
+    409
+  );
+  const nextCategory = await category('Different');
+  assert.equal(
+    (await request(`${workspaceRoot}/categories/${nextCategory}`, 'PATCH', { name: 'Ai' })).status,
+    409
+  );
+  const responses = await Promise.all(
+    Array.from({ length: 32 }, (_, index) =>
+      request(`${workspaceRoot}/categories`, 'POST', { name: `Group ${index}` })
+    )
+  );
+  assert.equal(responses.filter(response => response.status === 201).length, 28);
+  const id = await independent({ categoryId });
+  assert.equal(
+    (
+      await request(workspaceRoot, 'POST', {
+        name: 'Duplicate',
+        url: 'https://fixture.example.com/independent',
+        categoryId: nextCategory,
+      })
+    ).status,
+    409
+  );
+  const pages = await Promise.all(
+    Array.from({ length: 22 }, (_, index) =>
+      request(workspaceRoot, 'POST', {
+        name: `Page ${index}`,
+        url: `https://fixture.example.com/page-${index}`,
+      })
+    )
+  );
+  assert.equal(pages.filter(response => response.status === 201).length, 19);
+  assert.equal(
+    (await request(`${workspaceRoot}/${id}`, 'PATCH', { categoryId: nextCategory })).status,
+    200
+  );
+  const linked = await independent({ siteId: 'site', url: 'https://fixture.example.com/linked' });
+  assert.equal(
+    (await request(`${workspaceRoot}/${linked}`, 'PATCH', { siteId: null })).status,
+    409
+  );
+  const duplicate = await independent({ siteId: 'site' });
+  assert.equal((await request(`${workspaceRoot}/${id}`, 'PATCH', { siteId: 'site' })).status, 409);
+  assert.equal((await request(`${workspaceRoot}/${duplicate}`, 'DELETE')).status, 200);
+  assert.equal((await request(`${workspaceRoot}/${id}`, 'PATCH', { siteId: 'site' })).status, 200);
+});
+
+test('workspace total limit also applies to the legacy site create route', async () => {
+  await database
+    .prepare(
+      "INSERT INTO sites (id,user_id,workspace_id,name,domain) VALUES ('limit-site','owner','workspace','Limit','limit.fixture.test')"
+    )
+    .run();
+  for (let index = 0; index < 100; index++)
+    await monitor(`total-${index}`, 'fixture.example.com', 'manual', null, 'limit-site');
+  const input = { name: 'Over limit', url: 'https://fixture.example.com/overflow' };
+  assert.equal((await request('/api/competitors/site', 'POST', input)).status, 409);
+  assert.equal((await request(workspaceRoot, 'POST', input)).status, 409);
+  assert.equal((await (await request(workspaceRoot)).json()).data.monitors.length, 100);
+  await database.prepare("DELETE FROM sites WHERE id='limit-site'").run();
+});
+
+test('independent scheduled monitors retain cooldown and intersected trend populations', async () => {
+  const categoryId = await category();
+  const id = await independent({ categoryId, cadence: 'daily' });
+  await database
+    .prepare('UPDATE competitor_monitors SET next_check_at = ? WHERE id = ?')
+    .bind(instant, id)
+    .run();
+  await runCompetitorSchedule({ ...env, COMPETITOR_SCHEDULE_ENABLED: 'true' }, success, instant);
+  assert.equal((await competitorHistory(database, id)).length, 1);
+  assert.equal(
+    await checkCompetitor(env, id, { workspaceId: 'outside' }, success, instant + HOST_COOLDOWN_MS),
+    null
+  );
+  assert.equal(
+    await checkCompetitor(env, id, { workspaceId: 'workspace' }, success, instant + 1),
+    null
+  );
+  await checkCompetitor(env, id, { workspaceId: 'workspace' }, failure, Date.now());
+  await monitor('linked');
+  await checkCompetitor(env, 'linked', 'site', success, Date.now() + HOST_COOLDOWN_MS);
+  const filtered = await competitorReport(
+    env,
+    { workspaceId: 'workspace', siteId: 'unlinked', categoryId },
+    true
+  );
+  assert.equal(filtered.monitors.length, 1);
+  assert.equal(
+    filtered.trend.reduce((sum, day) => sum + day.checks, 0),
+    2
+  );
+  assert.equal(filtered.trend.at(-1)?.failures, 1);
+  assert.equal(filtered.trend.at(-1)?.changes, null);
+  const intersection = await competitorReport(
+    env,
+    { workspaceId: 'workspace', siteId: 'site', categoryId },
+    true
+  );
+  assert.equal(intersection.monitors.length, 0);
+  assert.ok(intersection.trend.every(day => day.checks === 0));
+});
+
+test('workspace-only competitor data survives orphan cleanup', async () => {
+  const db = drizzle(database);
+  await database.batch([
+    database.prepare("UPDATE users SET is_instance_owner=1 WHERE id='owner'"),
+    database.prepare(
+      "INSERT INTO workspaces (id,name,slug) VALUES ('orphan-competitors','Orphan','orphan-competitors')"
+    ),
+    database.prepare(
+      "INSERT INTO competitor_monitors (id,workspace_id,name,url,hostname,selector,created_at) VALUES ('orphan-monitor','orphan-competitors','Only data','https://fixture.example.com/orphan','fixture.example.com','main',0)"
+    ),
+  ]);
+  assert.equal(await workspaceHasCompetitors(db, 'orphan-competitors'), true);
+  await evictOrphanedMembers(db);
+  assert.equal(
+    (
+      await database
+        .prepare("SELECT count(*) AS total FROM competitor_monitors WHERE id='orphan-monitor'")
+        .first()
+    )?.total,
+    1
+  );
+  assert.equal(
+    (
+      await database
+        .prepare(
+          "SELECT role FROM workspace_members WHERE workspace_id='orphan-competitors' AND user_id='owner'"
+        )
+        .first()
+    )?.role,
+    'owner'
+  );
+  await database.batch([
+    database.prepare("DELETE FROM workspaces WHERE id='orphan-competitors'"),
+    database.prepare("UPDATE users SET is_instance_owner=0 WHERE id='owner'"),
+  ]);
+});
+
+test('workspace MCP discovers scoped categories, filters evidence and rejects malformed/foreign arguments without fetching', async () => {
+  const categoryId = await category();
+  const monitorId = await independent({ categoryId });
+  async function call(name: string, args: unknown) {
+    return (
+      await (
+        await request(
+          '/api/mcp',
+          'POST',
+          { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } },
+          'reader'
+        )
+      ).json()
+    ).result;
+  }
+  const workspaces = await call('list_competitor_workspaces', {});
+  assert.equal(workspaces.isError, false);
+  assert.deepEqual(
+    JSON.parse(workspaces.content[0].text).data.map(item => item.id),
+    ['workspace']
+  );
+  for (const [name, args] of [
+    ['get_competitor_categories', { workspaceId: 'workspace' }],
+    ['get_competitor_monitors', { workspaceId: 'workspace', categoryId, siteId: 'unlinked' }],
+    ['get_competitor_history', { workspaceId: 'workspace', monitorId }],
+  ] as const)
+    assert.equal((await call(name, args)).isError, false);
+  for (const args of [
+    {},
+    null,
+    [],
+    { workspaceId: null },
+    { workspaceId: 12 },
+    { workspaceId: 'outside' },
+    { workspaceId: 'workspace', siteId: 'outside-site' },
+    { workspaceId: 'workspace', categoryId: '' },
+    { siteId: 'site', categoryId },
+    { workspaceId: 'workspace', runScan: true },
+  ])
+    assert.equal((await call('get_competitor_monitors', args)).isError, true);
+  assert.equal(
+    (await call('get_competitor_history', { workspaceId: 'workspace', siteId: 'site', monitorId }))
+      .isError,
+    true
+  );
+  assert.equal(
+    (await call('get_competitor_history', { workspaceId: 'outside', monitorId })).isError,
+    true
+  );
+  assert.deepEqual(await competitorHistory(database, monitorId), []);
+});
+
+test('workspace categories support independent competitors and intersect with owned-site filters', async () => {
+  const root = '/api/competitors/workspaces/workspace';
+  const createdCategory = await request(`${root}/categories`, 'POST', { name: 'AI 视频' });
+  assert.equal(createdCategory.status, 201);
+  const categoryId = (await createdCategory.json()).data.id;
+  const independent = await request(root, 'POST', {
+    name: 'Independent fixture',
+    url: 'https://fixture.example.com/independent',
+    categoryId,
+  });
+  assert.equal(independent.status, 201);
+  const monitorId = (await independent.json()).data.id;
+  assert.equal(
+    (
+      await request(root, 'POST', {
+        name: 'Site fixture',
+        url: 'https://fixture.example.com/linked',
+        categoryId,
+        siteId: 'site',
+      })
+    ).status,
+    201
+  );
+  const all = (await (await request(`${root}?categoryId=${categoryId}`)).json()).data;
+  assert.equal(all.monitors.length, 2);
+  const unlinked = (
+    await (await request(`${root}?categoryId=${categoryId}&siteId=unlinked`)).json()
+  ).data;
+  assert.deepEqual(
+    unlinked.monitors.map(item => item.id),
+    [monitorId]
+  );
+  assert.equal(unlinked.monitors[0].siteId, null);
+  assert.equal((await (await request('/api/competitors/site')).json()).data.monitors.length, 1);
+  assert.equal((await request(`${root}?categoryId=${categoryId}&siteId=other-site`)).status, 200);
+  assert.equal(
+    (await (await request(`${root}?categoryId=${categoryId}&siteId=other-site`)).json()).data
+      .monitors.length,
+    0
+  );
 });

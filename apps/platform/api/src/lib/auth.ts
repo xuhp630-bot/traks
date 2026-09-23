@@ -15,7 +15,11 @@ import {
   workspaceMembers,
   workspaceInvitations,
 } from '../db/schema';
-import { ensureDefaultWorkspace, evictOrphanedMembers } from './workspaces';
+import {
+  ensureDefaultWorkspace,
+  evictOrphanedMembers,
+  workspaceHasCompetitors,
+} from './workspaces';
 import { findPendingInvitation, consumeInvitation } from './invitations';
 import { ac, workspaceRoles } from './permissions';
 import type { Bindings } from '../types';
@@ -177,6 +181,11 @@ function createAuth(env: Bindings, origin: string) {
               .where(eq(sites.workspaceId, org.id));
             if (Number(siteCount) > 0) {
               throw new APIError('BAD_REQUEST', { message: 'Move or delete its sites first' });
+            }
+            if (await workspaceHasCompetitors(db, org.id)) {
+              throw new APIError('BAD_REQUEST', {
+                message: 'Delete competitor monitors and categories first',
+              });
             }
             const [{ n: memberships }] = await db
               .select({ n: sql<number>`count(*)` })

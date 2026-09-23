@@ -5,7 +5,9 @@ import type {
   CompetitorMonitor,
   CompetitorReport,
   CompetitorSnapshot,
+  CompetitorCategory,
 } from '../packages/shared/src/competitors';
+import { COMPETITOR_LIMITS } from '../packages/shared/src/competitors';
 
 const now = Date.now();
 const before: CompetitorSnapshot = {
@@ -61,6 +63,9 @@ const checks: CompetitorCheck[] = [
 ];
 const seed: CompetitorMonitor = {
   id: 'fixture-monitor',
+  workspaceId: 'fixture-workspace',
+  siteId: 'fixture-site',
+  categoryId: 'fixture-category',
   name: '合成竞品 · 定价页',
   url: 'https://fixture.example.com/pricing',
   hostname: 'fixture.example.com',
@@ -72,6 +77,9 @@ const seed: CompetitorMonitor = {
   latest: checks[0],
 };
 let monitors = [{ ...seed }];
+let categories: CompetitorCategory[] = [
+  { id: 'fixture-category', name: 'AI 工具', monitorCount: 1 },
+];
 let scenario = 'normal';
 let nextId = 0;
 const histories = new Map<string, CompetitorCheck[]>([[seed.id, checks]]);
@@ -85,12 +93,14 @@ async function readBody(request: IncomingMessage) {
   return text ? JSON.parse(text) : {};
 }
 async function fixture(request: IncomingMessage, response: ServerResponse, next: () => void) {
-  const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+  const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  const path = url.pathname;
   if (path === '/__fixture/state') {
     const body = await readBody(request);
     scenario = body.scenario ?? 'normal';
     if (body.reset) {
       monitors = [{ ...seed }];
+      categories = [{ id: 'fixture-category', name: 'AI 工具', monitorCount: 1 }];
       histories.clear();
       histories.set(seed.id, checks);
     }
@@ -122,19 +132,65 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
           role: scenario === 'member' ? 'member' : 'owner',
           siteCount: 2,
         },
+        {
+          id: 'empty-workspace',
+          name: '无网站工作区 · 合成QA',
+          role: scenario === 'member' ? 'member' : 'owner',
+          siteCount: 0,
+        },
       ],
     });
   if (path === '/api/sites')
     return send(response, {
-      data: [
-        { id: 'fixture-site', name: '本地合成站点', domain: 'owned.fixture.test' },
-        { id: 'empty-site', name: '另一隔离站点', domain: 'other.fixture.test' },
-      ],
+      data:
+        url.searchParams.get('workspaceId') === 'empty-workspace' || scenario === 'no-sites'
+          ? []
+          : [
+              { id: 'fixture-site', name: '本地合成站点', domain: 'owned.fixture.test' },
+              { id: 'empty-site', name: '另一隔离站点', domain: 'other.fixture.test' },
+            ],
     });
   if (path.startsWith('/api/competitors/')) {
-    const [, , , siteId, monitorId, action] = path.split('/');
+    const [, , , , workspaceId, monitorId, action] = path.split('/');
     if (scenario === 'error') return send(response, { error: '合成读取失败，请重试' }, 503);
     if (scenario === 'loading') await new Promise(resolve => setTimeout(resolve, 1800));
+    if (monitorId === 'categories') {
+      if (request.method === 'GET')
+        return send(response, {
+          data: {
+            canManage: scenario !== 'member',
+            limit: 30,
+            categories: categories
+              .filter(category =>
+                category.id.startsWith(workspaceId === 'empty-workspace' ? 'empty-' : 'fixture-')
+              )
+              .map(category => ({
+                ...category,
+                monitorCount: monitors.filter(
+                  monitor =>
+                    monitor.workspaceId === workspaceId && monitor.categoryId === category.id
+                ).length,
+              })),
+          },
+        });
+      if (scenario === 'member') return send(response, { error: 'Read only' }, 403);
+      const body = await readBody(request);
+      if (request.method === 'POST') {
+        const id = `${workspaceId === 'empty-workspace' ? 'empty' : 'fixture'}-category-${++nextId}`;
+        categories.push({ id, name: body.name, monitorCount: 0 });
+        return send(response, { data: { id } }, 201);
+      }
+      const category = categories.find(category => category.id === action);
+      if (!category) return send(response, { error: 'Not found' }, 404);
+      if (request.method === 'PATCH') category.name = body.name;
+      if (request.method === 'DELETE') {
+        categories = categories.filter(category => category.id !== action);
+        monitors.forEach(monitor => {
+          if (monitor.categoryId === action) monitor.categoryId = null;
+        });
+      }
+      return send(response, { data: { id: action } });
+    }
     if (action === 'history')
       return scenario === 'history-error'
         ? send(response, { error: '合成历史读取失败' }, 503)
@@ -146,7 +202,21 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
             },
           });
     if (request.method === 'GET') {
-      const visible = scenario === 'empty' || siteId === 'empty-site' ? [] : monitors;
+      const siteFilter = url.searchParams.get('siteId');
+      const categoryFilter = url.searchParams.get('categoryId');
+      const visible =
+        scenario === 'empty'
+          ? []
+          : monitors.filter(
+              monitor =>
+                monitor.workspaceId === workspaceId &&
+                (!siteFilter ||
+                  (siteFilter === 'unlinked' ? !monitor.siteId : monitor.siteId === siteFilter)) &&
+                (!categoryFilter ||
+                  (categoryFilter === 'uncategorized'
+                    ? !monitor.categoryId
+                    : monitor.categoryId === categoryFilter))
+            );
       const trend = Array.from({ length: 30 }, (_, index) => {
         const date = new Date(now - (29 - index) * 86_400_000).toISOString().slice(0, 10);
         const records = visible
@@ -170,6 +240,15 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
         schedulerEnabled: false,
         allowedHosts: ['fixture.example.com'],
         retentionPerMonitor: 60,
+        scope: {
+          workspaceId,
+          ...(siteFilter ? { siteId: siteFilter } : {}),
+          ...(categoryFilter ? { categoryId: categoryFilter } : {}),
+        },
+        categories,
+        workspaceMonitorCount: monitors.filter(monitor => monitor.workspaceId === workspaceId)
+          .length,
+        limits: COMPETITOR_LIMITS,
         monitors: visible,
         trend,
         limitations: ['Synthetic local fixture only'],
@@ -184,6 +263,7 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
         ...seed,
         ...body,
         id,
+        workspaceId,
         hostname: new URL(body.url).hostname,
         retainedChecks: 0,
         latest: null,
@@ -194,7 +274,9 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
     const target = monitors.find(item => item.id === monitorId);
     if (!target) return send(response, { error: 'Not found' }, 404);
     if (request.method === 'PATCH') {
-      target.cadence = body.cadence;
+      if (body.cadence !== undefined) target.cadence = body.cadence;
+      if (body.siteId !== undefined) target.siteId = body.siteId;
+      if (body.categoryId !== undefined) target.categoryId = body.categoryId;
       return send(response, { data: { id: target.id } });
     }
     if (request.method === 'DELETE') {

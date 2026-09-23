@@ -11,7 +11,12 @@ import {
   ShieldCheck,
   AlertTriangle,
 } from 'lucide-react';
-import type { CompetitorCheck, CompetitorSnapshot } from '@traks/shared';
+import type {
+  CompetitorCheck,
+  CompetitorSnapshot,
+  CompetitorCategory,
+  CompetitorMonitor,
+} from '@traks/shared';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
@@ -19,6 +24,8 @@ import { Input } from '@/components/ui/input';
 
 export const Route = createLazyFileRoute('/portal/competitors')({ component: CompetitorsPage });
 const controlClass = 'min-h-11 w-full rounded-lg border border-[#E3E2E6] bg-white px-3 text-sm';
+type OwnedSite = { id: string; name: string; domain: string };
+type MonitorAction = { suffix: string; method: 'POST' | 'PATCH' | 'DELETE'; body?: object };
 const formatTime = (timestamp: number | null): string =>
   timestamp ? new Date(timestamp).toLocaleString() : '尚未检查';
 const labels: Record<keyof CompetitorSnapshot, string> = {
@@ -63,14 +70,12 @@ function ErrorNotice({ error }: { error: unknown }): ReactElement {
 
 function CompetitorsPage(): ReactElement {
   const { current, isLoading } = useWorkspace();
-  const [selection, setSelection] = useState('');
   const sites = useQuery({
     queryKey: ['sites', current?.id],
     queryFn: () => api.getSites(current!.id),
     enabled: !!current,
   });
-  const siteRows = (sites.data?.data ?? []) as { id: string; name: string; domain: string }[];
-  const selected = siteRows.find(site => site.id === selection)?.id ?? siteRows[0]?.id;
+  const siteRows = (sites.data?.data ?? []) as OwnedSite[];
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">
       <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -78,28 +83,14 @@ function CompetitorsPage(): ReactElement {
           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[#6F6D7A]">
             <Radar size={16} /> Competitive intelligence
           </p>
-          <h1 className="text-3xl font-semibold tracking-tight text-[#3D3B4F]">竞品监控</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-[#3D3B4F]">竞品分析与监控</h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-[#6F6D7A]">
-            看清公开页面发生了什么变化，再决定自己的下一步。与本站埋点、流量及转化数据独立。
+            按业务分类整理，或关联自己的站点；两个维度可以组合筛选。不必先建己方网站，也能独立监控公开竞品页面。
           </p>
         </div>
-        <label className="w-full text-xs text-[#6F6D7A] sm:w-64">
-          归属己方站点
-          <select
-            aria-label="归属己方站点"
-            className={`${controlClass} mt-2`}
-            value={selected ?? ''}
-            onChange={event => setSelection(event.target.value)}
-            disabled={!siteRows.length}
-          >
-            {!siteRows.length && <option value="">暂无站点</option>}
-            {siteRows.map(site => (
-              <option key={site.id} value={site.id}>
-                {site.name} · {site.domain}
-              </option>
-            ))}
-          </select>
-        </label>
+        <p className="min-w-0 break-words text-sm text-[#6F6D7A]">
+          工作区 · {current?.name ?? '正在加载'}
+        </p>
       </div>
       {isLoading || sites.isLoading ? (
         <p role="status">正在加载站点…</p>
@@ -110,22 +101,44 @@ function CompetitorsPage(): ReactElement {
             重试站点列表
           </Button>
         </>
-      ) : !selected ? (
+      ) : !current ? (
         <p className="rounded-2xl border bg-white p-8 text-sm">
-          请先在 Sites 添加自己的站点，再建立独立竞品清单。不要给竞品安装本站追踪脚本。
+          暂无可访问工作区，请检查登录状态或联系工作区拥有者。
         </p>
       ) : (
-        <MonitorPanel key={`${current?.id}:${selected}`} siteId={selected} />
+        <MonitorPanel key={current.id} workspaceId={current.id} sites={siteRows} />
       )}
     </main>
   );
 }
 
-function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
+function MonitorPanel({
+  workspaceId,
+  sites,
+}: {
+  workspaceId: string;
+  sites: OwnedSite[];
+}): ReactElement {
   const client = useQueryClient();
+  const [siteFilter, setSiteFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [newSite, setNewSite] = useState('');
+  const [newCategory, setNewCategory] = useState('');
+  const [notice, setNotice] = useState('');
+  const groups = useQuery({
+    queryKey: ['competitor-categories', workspaceId],
+    queryFn: () => api.getCompetitorCategories(workspaceId),
+    retry: false,
+  });
+  const categories = groups.data?.data.categories ?? [];
   const report = useQuery({
-    queryKey: ['competitors', siteId],
-    queryFn: () => api.getCompetitors(siteId),
+    queryKey: ['competitors', workspaceId, siteFilter, categoryFilter],
+    queryFn: () =>
+      api.getCompetitors({
+        workspaceId,
+        ...(siteFilter ? { siteId: siteFilter } : {}),
+        ...(categoryFilter ? { categoryId: categoryFilter } : {}),
+      }),
     retry: false,
   });
   const [active, setActive] = useState('');
@@ -134,23 +147,31 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
   const [selector, setSelector] = useState('main');
   const [cadence, setCadence] = useState('manual');
   const mutation = useMutation({
-    mutationFn: (action: { suffix: string; method: 'POST' | 'PATCH' | 'DELETE'; body?: object }) =>
-      api.mutateCompetitor(siteId, action.suffix, action.method, action.body),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['competitors', siteId] });
-      void client.invalidateQueries({ queryKey: ['competitor-history', siteId] });
+    mutationFn: (action: MonitorAction) =>
+      api.mutateCompetitor({ workspaceId }, action.suffix, action.method, action.body),
+    onMutate: () => setNotice(''),
+    onSuccess: (_, action) => {
+      if (action.method === 'DELETE' && action.suffix === `/categories/${categoryFilter}`)
+        setCategoryFilter('');
+      if (action.method === 'DELETE' && action.suffix === `/categories/${newCategory}`)
+        setNewCategory('');
+      setNotice('操作已保存。清单与趋势按当前筛选刷新；若记录不在此范围，请清除筛选查看。');
+      void client.invalidateQueries({ queryKey: ['competitors', workspaceId] });
+      void client.invalidateQueries({ queryKey: ['competitor-history', workspaceId] });
+      void client.invalidateQueries({ queryKey: ['competitor-categories', workspaceId] });
     },
   });
-  const data = report.data?.data;
+  const data = report.error ? undefined : report.data?.data;
   const selected = data?.monitors.find(monitor => monitor.id === active) ?? data?.monitors[0];
   const history = useQuery({
-    queryKey: ['competitor-history', siteId, selected?.id],
-    queryFn: () => api.getCompetitorHistory(siteId, selected!.id),
+    queryKey: ['competitor-history', workspaceId, selected?.id],
+    queryFn: () => api.getCompetitorHistory({ workspaceId }, selected!.id),
     enabled: !!selected,
     retry: false,
   });
   const refresh = (): void => {
     void report.refetch();
+    void groups.refetch();
     if (selected) void history.refetch();
   };
   const add = async (event: FormEvent): Promise<void> => {
@@ -159,7 +180,14 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
       await mutation.mutateAsync({
         suffix: '',
         method: 'POST',
-        body: { name, url, selector, cadence },
+        body: {
+          name,
+          url,
+          selector,
+          cadence,
+          siteId: newSite || null,
+          categoryId: newCategory || null,
+        },
       });
       setName('');
       setUrl('');
@@ -177,6 +205,89 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
   );
   return (
     <>
+      <section
+        aria-label="竞品范围筛选"
+        className="grid gap-4 rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+      >
+        <label className="min-w-0 text-xs">
+          按分类查看
+          <select
+            aria-label="按分类查看"
+            className={`${controlClass} mt-2`}
+            value={categoryFilter}
+            disabled={groups.isLoading || !!groups.error}
+            onChange={event => {
+              const value = event.target.value;
+              setCategoryFilter(value);
+              setNewCategory(value === 'uncategorized' ? '' : value);
+              setActive('');
+              mutation.reset();
+            }}
+          >
+            <option value="">全部分类</option>
+            <option value="uncategorized">未分类</option>
+            {categories.map(category => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+            {categoryFilter &&
+              categoryFilter !== 'uncategorized' &&
+              !categories.some(category => category.id === categoryFilter) && (
+                <option value={categoryFilter}>分类已失效，请清除筛选</option>
+              )}
+          </select>
+        </label>
+        <label className="min-w-0 text-xs">
+          按己方网站查看
+          <select
+            aria-label="按己方网站查看"
+            className={`${controlClass} mt-2`}
+            value={siteFilter}
+            onChange={event => {
+              const value = event.target.value;
+              setSiteFilter(value);
+              setNewSite(value === 'unlinked' ? '' : value);
+              setActive('');
+              mutation.reset();
+            }}
+          >
+            <option value="">全部网站与独立监控</option>
+            <option value="unlinked">独立监控 · 未关联己方网站</option>
+            {sites.map(site => (
+              <option key={site.id} value={site.id}>
+                {site.name} · {site.domain}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          variant="outline"
+          disabled={!siteFilter && !categoryFilter}
+          onClick={() => {
+            setSiteFilter('');
+            setCategoryFilter('');
+            setNewSite('');
+            setNewCategory('');
+            setActive('');
+            mutation.reset();
+          }}
+        >
+          清除筛选
+        </Button>
+        <p className="text-xs leading-5 text-[#6F6D7A] sm:col-span-3">
+          分类与网站取交集；下方曲线、清单和证据来自同一范围。
+          {!sites.length && ' 当前没有己方网站，仍可按分类添加独立竞品。'}
+        </p>
+      </section>
+      {groups.error && (
+        <>
+          <ErrorNotice error={groups.error} />
+          <Button variant="outline" onClick={() => void groups.refetch()}>
+            重试分类列表
+          </Button>
+        </>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[#6F6D7A]">
         <span>
           公开HTML观察 · 不含竞品访问量、客户名单或转化率{' '}
@@ -193,6 +304,11 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
       </div>
       {report.error && <ErrorNotice error={report.error} />}
       {mutation.error && <ErrorNotice error={mutation.error} />}
+      {notice && (
+        <p role="status" className="text-sm text-[#537695]">
+          {notice}
+        </p>
+      )}
       {mutation.isPending && (
         <p role="status" className="text-sm text-[#6F6D7A]">
           正在执行操作，请勿重复提交。页面检查通常需要数秒，网络读取上限20秒。
@@ -254,6 +370,14 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
               </div>
             )}
           </section>
+          {data.canManage && !groups.error && (
+            <CategoryManager
+              categories={categories}
+              limit={data.limits.categories}
+              pending={mutation.isPending}
+              onAction={action => mutation.mutateAsync(action)}
+            />
+          )}
           <div className="grid gap-4 text-sm md:grid-cols-2">
             <div className="flex gap-3 rounded-xl border border-[#E3E2E6] bg-white p-4">
               <ShieldCheck className="shrink-0 text-[#6b8ead]" size={20} />
@@ -287,11 +411,12 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
               <h2 className="mb-4 font-semibold">
                 添加公开页面{' '}
                 <span className="text-xs font-normal text-[#6F6D7A]">
-                  {data.monitors.length}/20
+                  工作区 {data.workspaceMonitorCount}/{data.limits.workspace} · 当前范围{' '}
+                  {data.monitors.length} 页
                 </span>
               </h2>
               <fieldset
-                disabled={mutation.isPending || data.monitors.length >= 20}
+                disabled={mutation.isPending || data.workspaceMonitorCount >= data.limits.workspace}
                 className="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-5"
               >
                 <label className="text-xs">
@@ -340,9 +465,42 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
                     <option value="weekly">每周</option>
                   </select>
                 </label>
+                <label className="text-xs sm:col-span-1 lg:col-span-2">
+                  所属分类（可选）
+                  <select
+                    aria-label="新增监控所属分类"
+                    className={`${controlClass} mt-2`}
+                    value={newCategory}
+                    onChange={event => setNewCategory(event.target.value)}
+                    disabled={groups.isLoading || !!groups.error}
+                  >
+                    <option value="">未分类</option>
+                    {categories.map(category => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs sm:col-span-1 lg:col-span-3">
+                  关联己方网站（可选）
+                  <select
+                    aria-label="新增监控关联网站"
+                    className={`${controlClass} mt-2`}
+                    value={newSite}
+                    onChange={event => setNewSite(event.target.value)}
+                  >
+                    <option value="">独立监控 · 不关联己方网站</option>
+                    {sites.map(site => (
+                      <option key={site.id} value={site.id}>
+                        {site.name} · {site.domain}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div className="sm:col-span-2 lg:col-span-5 flex flex-wrap items-center justify-between gap-3">
                   <p className="text-xs leading-5 text-[#6F6D7A]">
-                    填写公开页面URL，不是sitemap.xml；Sitemap目前只用于选页，不自动订阅。不要输入个人信息、登录/支付页或带凭据参数的URL。首个成功样本只建立基线。
+                    每站最多20页，工作区独立监控最多20页。同范围同URL不能靠换分类重复添加。填写公开页面URL，不是sitemap.xml；Sitemap只用于选页，不自动订阅。不输入个人信息或登录/支付页。首个成功样本只建立基线。
                   </p>
                   <Button type="submit">
                     <Plus size={16} className="mr-2" />
@@ -357,7 +515,7 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
               <h2 className="font-semibold">页面清单</h2>
               {!data.monitors.length && (
                 <p className="rounded-xl border bg-white p-6 text-sm text-[#6F6D7A]">
-                  尚未添加竞品页面。
+                  当前范围没有竞品页面。可添加监控，或清除筛选查看全部；不代表竞品没有变化。
                 </p>
               )}
               {data.monitors.map(monitor => (
@@ -385,6 +543,11 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
                   <p className="mt-3 text-xs">
                     {monitor.latest ? statusLabels[monitor.latest.status] : '未检查'} ·{' '}
                     {formatTime(monitor.lastCheckedAt)}
+                  </p>
+                  <p className="mt-2 break-words text-xs text-[#537695]">
+                    {categories.find(category => category.id === monitor.categoryId)?.name ??
+                      '未分类'}{' '}
+                    · {sites.find(site => site.id === monitor.siteId)?.name ?? '独立监控'}
                   </p>
                   <p className="mt-1 text-xs text-[#6F6D7A]">
                     区域 {monitor.selector} · 保留 {monitor.retainedChecks}/60 次
@@ -448,6 +611,16 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
               <h2 className="font-semibold">
                 {selected ? `${selected.name} · 证据记录` : '证据记录'}
               </h2>
+              {selected && data.canManage && !groups.error && (
+                <AssignmentEditor
+                  key={`${selected.id}:${selected.siteId}:${selected.categoryId}`}
+                  monitor={selected}
+                  sites={sites}
+                  categories={categories}
+                  pending={mutation.isPending}
+                  onAction={action => mutation.mutateAsync(action)}
+                />
+              )}
               {history.error && <ErrorNotice error={history.error} />}
               {history.isFetching && (
                 <p role="status" className="text-sm text-[#6F6D7A]">
@@ -471,6 +644,225 @@ function MonitorPanel({ siteId }: { siteId: string }): ReactElement {
         </>
       )}
     </>
+  );
+}
+
+function CategoryManager({
+  categories,
+  limit,
+  pending,
+  onAction,
+}: {
+  categories: CompetitorCategory[];
+  limit: number;
+  pending: boolean;
+  onAction: (action: MonitorAction) => Promise<unknown>;
+}): ReactElement {
+  const [name, setName] = useState('');
+  const create = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      await onAction({ suffix: '/categories', method: 'POST', body: { name } });
+      setName('');
+    } catch {
+      return;
+    }
+  };
+  return (
+    <details className="rounded-2xl border border-[#E3E2E6] bg-white p-5">
+      <summary className="cursor-pointer font-semibold">
+        管理分类{' '}
+        <span className="ml-2 text-xs font-normal text-[#6F6D7A]">
+          工作区 {categories.length}/{limit}
+        </span>
+      </summary>
+      <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
+        例如 AI 视频、SEO
+        工具。分类数和每类页数统计整个工作区；删除分类仅变为“未分类”，不会删除监控或历史。
+      </p>
+      <form onSubmit={event => void create(event)} className="mt-4">
+        <fieldset
+          disabled={pending || categories.length >= limit}
+          className="flex flex-col gap-3 sm:flex-row sm:items-end"
+        >
+          <label className="min-w-0 flex-1 text-xs">
+            新分类名称
+            <Input
+              aria-label="新分类名称"
+              className="mt-2 min-h-11"
+              value={name}
+              onChange={event => setName(event.target.value)}
+              required
+              maxLength={40}
+              placeholder="例如：AI 视频"
+            />
+          </label>
+          <Button type="submit">添加分类</Button>
+        </fieldset>
+      </form>
+      <div className="mt-4 space-y-3">
+        {categories.map(category => (
+          <CategoryRow
+            key={`${category.id}:${category.name}`}
+            category={category}
+            pending={pending}
+            onAction={onAction}
+          />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function CategoryRow({
+  category,
+  pending,
+  onAction,
+}: {
+  category: CompetitorCategory;
+  pending: boolean;
+  onAction: (action: MonitorAction) => Promise<unknown>;
+}): ReactElement {
+  const [name, setName] = useState(category.name);
+  const rename = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      await onAction({
+        suffix: `/categories/${encodeURIComponent(category.id)}`,
+        method: 'PATCH',
+        body: { name },
+      });
+    } catch {
+      return;
+    }
+  };
+  const remove = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `删除分类“${category.name}”？${category.monitorCount}个监控将变为未分类；全部历史保留。`
+      )
+    )
+      return;
+    try {
+      await onAction({
+        suffix: `/categories/${encodeURIComponent(category.id)}`,
+        method: 'DELETE',
+      });
+    } catch {
+      return;
+    }
+  };
+  return (
+    <form onSubmit={event => void rename(event)}>
+      <fieldset
+        disabled={pending}
+        className="flex flex-wrap items-center gap-2 rounded-lg bg-[#F9F8F6] p-3"
+      >
+        <Input
+          aria-label={`分类名称：${category.name}`}
+          className="min-w-0 basis-full sm:basis-0 sm:flex-1"
+          value={name}
+          onChange={event => setName(event.target.value)}
+          required
+          maxLength={40}
+        />
+        <span className="text-xs text-[#6F6D7A]">{category.monitorCount} 页</span>
+        <Button type="submit" size="sm" variant="outline" disabled={name.trim() === category.name}>
+          保存名称
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          aria-label={`删除分类${category.name}`}
+          onClick={() => void remove()}
+        >
+          删除分类
+        </Button>
+      </fieldset>
+    </form>
+  );
+}
+
+function AssignmentEditor({
+  monitor,
+  sites,
+  categories,
+  pending,
+  onAction,
+}: {
+  monitor: CompetitorMonitor;
+  sites: OwnedSite[];
+  categories: CompetitorCategory[];
+  pending: boolean;
+  onAction: (action: MonitorAction) => Promise<unknown>;
+}): ReactElement {
+  const [siteId, setSiteId] = useState(monitor.siteId ?? '');
+  const [categoryId, setCategoryId] = useState(monitor.categoryId ?? '');
+  const save = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      await onAction({
+        suffix: `/${encodeURIComponent(monitor.id)}`,
+        method: 'PATCH',
+        body: { siteId: siteId || null, categoryId: categoryId || null },
+      });
+    } catch {
+      return;
+    }
+  };
+  return (
+    <details className="rounded-xl border border-[#E3E2E6] bg-white p-4">
+      <summary className="cursor-pointer text-sm font-medium">调整分类 / 关联网站</summary>
+      <form onSubmit={event => void save(event)} className="mt-4">
+        <fieldset disabled={pending} className="grid gap-3 sm:grid-cols-2">
+          <label className="min-w-0 text-xs">
+            所属分类
+            <select
+              aria-label="调整所属分类"
+              className={`${controlClass} mt-2`}
+              value={categoryId}
+              onChange={event => setCategoryId(event.target.value)}
+            >
+              <option value="">未分类</option>
+              {categories.map(category => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="min-w-0 text-xs">
+            关联己方网站
+            <select
+              aria-label="调整关联网站"
+              className={`${controlClass} mt-2`}
+              value={siteId}
+              onChange={event => setSiteId(event.target.value)}
+            >
+              <option value="">独立监控 · 不关联网站</option>
+              {sites.map(site => (
+                <option key={site.id} value={site.id}>
+                  {site.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs leading-5 text-[#6F6D7A] sm:col-span-2">
+            历史与成功基线保留，并随当前归属汇总，因此以往曲线也会重新归类。不能跨工作区移动；同范围URL去重与页数上限仍生效。
+          </p>
+          <Button
+            type="submit"
+            variant="outline"
+            disabled={
+              siteId === (monitor.siteId ?? '') && categoryId === (monitor.categoryId ?? '')
+            }
+          >
+            保存归属
+          </Button>
+        </fieldset>
+      </form>
+    </details>
   );
 }
 

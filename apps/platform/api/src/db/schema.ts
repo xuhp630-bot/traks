@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, index, check } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import type { FunnelStep, SegmentFilters } from '@traks/shared';
 
@@ -320,13 +321,29 @@ export const eventCatalogs = sqliteTable(
   ]
 );
 
+export const competitorCategories = sqliteTable(
+  'competitor_categories',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    nameKey: text('name_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  table => [uniqueIndex('competitor_category_name_idx').on(table.workspaceId, table.nameKey)]
+);
+
 export const competitorMonitors = sqliteTable(
   'competitor_monitors',
   {
     id: text('id').primaryKey(),
-    siteId: text('site_id')
-      .notNull()
-      .references(() => sites.id, { onDelete: 'cascade' }),
+    siteId: text('site_id').references(() => sites.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    categoryId: text('category_id').references(() => competitorCategories.id, {
+      onDelete: 'set null',
+    }),
     name: text('name').notNull(),
     url: text('url').notNull(),
     hostname: text('hostname').notNull(),
@@ -340,7 +357,13 @@ export const competitorMonitors = sqliteTable(
     leaseUntil: integer('lease_until').notNull().default(0),
   },
   table => [
+    check(
+      'competitor_owner_check',
+      sql`(${table.siteId} IS NOT NULL AND ${table.workspaceId} IS NULL) OR (${table.siteId} IS NULL AND ${table.workspaceId} IS NOT NULL)`
+    ),
     uniqueIndex('competitor_site_url_idx').on(table.siteId, table.url),
+    uniqueIndex('competitor_workspace_url_idx').on(table.workspaceId, table.url),
+    index('competitor_category_idx').on(table.categoryId),
     index('competitor_due_idx').on(table.nextCheckAt),
     index('competitor_host_check_idx').on(table.hostname, table.lastCheckedAt),
   ]
