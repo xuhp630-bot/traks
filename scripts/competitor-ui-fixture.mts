@@ -6,6 +6,8 @@ import type {
   CompetitorReport,
   CompetitorSnapshot,
   CompetitorCategory,
+  CompetitorResearchProfile,
+  CompetitorResearchReport,
 } from '../packages/shared/src/competitors';
 import { COMPETITOR_LIMITS } from '../packages/shared/src/competitors';
 
@@ -80,6 +82,27 @@ let monitors = [{ ...seed }];
 let categories: CompetitorCategory[] = [
   { id: 'fixture-category', name: 'AI 工具', monitorCount: 1 },
 ];
+const researchSeed: CompetitorResearchProfile = {
+  id: 'fixture-research',
+  workspaceId: 'fixture-workspace',
+  brandName: 'Synthetic image tool',
+  homepageUrl: 'https://fixture.example.com/',
+  hostname: 'fixture.example.com',
+  pageTitle: 'Synthetic public title',
+  productSummary: 'Only local QA data; this record neither crawls nor schedules a target.',
+  lifecycleStatus: 'focus',
+  seedKeywords: ['AI image generator'],
+  paymentProviders: [{ provider: 'Stripe', status: 'evidence_only' }],
+  sources: [{ url: 'https://fixture.example.com/pricing', kind: 'pricing' }],
+  sourceThreadUrl: null,
+  notes: 'Synthetic fixture data',
+  createdAt: now - 86_400_000,
+  updatedAt: now,
+  categories: [{ id: 'fixture-category', name: 'AI 工具' }],
+  sites: [{ id: 'fixture-site', name: '本地合成站点', domain: 'owned.fixture.test' }],
+  monitors: [{ id: 'fixture-monitor', name: '合成竞品 · 定价页', url: seed.url }],
+};
+let researchProfiles = [{ ...researchSeed }];
 let scenario = 'normal';
 let nextId = 0;
 const histories = new Map<string, CompetitorCheck[]>([[seed.id, checks]]);
@@ -101,6 +124,7 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
     if (body.reset) {
       monitors = [{ ...seed }];
       categories = [{ id: 'fixture-category', name: 'AI 工具', monitorCount: 1 }];
+      researchProfiles = [{ ...researchSeed }];
       histories.clear();
       histories.set(seed.id, checks);
     }
@@ -151,9 +175,86 @@ async function fixture(request: IncomingMessage, response: ServerResponse, next:
             ],
     });
   if (path.startsWith('/api/competitors/')) {
-    const [, , , , workspaceId, monitorId, action] = path.split('/');
+    const [, , , , workspaceId, monitorId, action, linkKind] = path.split('/');
     if (scenario === 'error') return send(response, { error: '合成读取失败，请重试' }, 503);
     if (scenario === 'loading') await new Promise(resolve => setTimeout(resolve, 1800));
+    if (monitorId === 'research') {
+      const lifecycleStatus = url.searchParams.get('lifecycleStatus');
+      const profile = researchProfiles.find(item => item.id === action);
+      if (request.method === 'GET') {
+        const data: CompetitorResearchReport = {
+          source: 'manual_research_library',
+          generatedAt: Date.now(),
+          canManage: scenario !== 'member',
+          scope: {
+            workspaceId,
+            ...(lifecycleStatus ? { lifecycleStatus: lifecycleStatus as CompetitorResearchProfile['lifecycleStatus'] } : {}),
+          },
+          limits: {
+            researchProfiles: COMPETITOR_LIMITS.researchProfiles,
+            researchCategoryLinks: COMPETITOR_LIMITS.researchCategoryLinks,
+            researchSiteLinks: COMPETITOR_LIMITS.researchSiteLinks,
+            researchMonitorLinks: COMPETITOR_LIMITS.researchMonitorLinks,
+          },
+          profiles: researchProfiles.filter(
+            item => item.workspaceId === workspaceId && (!lifecycleStatus || item.lifecycleStatus === lifecycleStatus)
+          ),
+          limitations: ['Synthetic local fixture only'],
+        };
+        return send(response, { data });
+      }
+      if (scenario === 'member') return send(response, { error: 'Read only' }, 403);
+      const body = await readBody(request);
+      if (request.method === 'POST' && !action) {
+        const id = `fixture-research-${++nextId}`;
+        researchProfiles.push({
+          id,
+          workspaceId,
+          brandName: body.brandName,
+          homepageUrl: body.homepageUrl,
+          hostname: new URL(body.homepageUrl).hostname,
+          pageTitle: body.pageTitle ?? null,
+          productSummary: body.productSummary ?? null,
+          lifecycleStatus: body.lifecycleStatus ?? 'inbox',
+          seedKeywords: body.seedKeywords ?? [],
+          paymentProviders: body.paymentProviders ?? [],
+          sources: body.sources ?? [],
+          sourceThreadUrl: body.sourceThreadUrl ?? null,
+          notes: body.notes ?? null,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          categories: [],
+          sites: [],
+          monitors: [],
+        });
+        return send(response, { data: { id } }, 201);
+      }
+      if (!profile) return send(response, { error: 'Not found' }, 404);
+      if (request.method === 'PATCH') {
+        Object.assign(profile, body, { updatedAt: Date.now() });
+        return send(response, { data: { id: profile.id } });
+      }
+      if (request.method === 'PUT') {
+        if (linkKind === 'categories')
+          profile.categories = categories
+            .filter(category => body.ids.includes(category.id))
+            .map(category => ({ id: category.id, name: category.name }));
+        if (linkKind === 'sites')
+          profile.sites = body.ids
+            .filter((id: string) => id === 'fixture-site' || id === 'empty-site')
+            .map((id: string) => ({
+              id,
+              name: id === 'fixture-site' ? '本地合成站点' : '另一隔离站点',
+              domain: id === 'fixture-site' ? 'owned.fixture.test' : 'other.fixture.test',
+            }));
+        if (linkKind === 'monitors')
+          profile.monitors = monitors
+            .filter(monitor => body.ids.includes(monitor.id))
+            .map(monitor => ({ id: monitor.id, name: monitor.name, url: monitor.url }));
+        return send(response, { data: { id: profile.id } });
+      }
+      return send(response, { error: 'Unimplemented research fixture path' }, 404);
+    }
     if (monitorId === 'categories') {
       if (request.method === 'GET')
         return send(response, {

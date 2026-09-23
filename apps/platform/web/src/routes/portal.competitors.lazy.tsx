@@ -16,6 +16,8 @@ import type {
   CompetitorSnapshot,
   CompetitorCategory,
   CompetitorMonitor,
+  CompetitorResearchProfile,
+  CompetitorResearchStatus,
 } from '@traks/shared';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
@@ -26,6 +28,7 @@ export const Route = createLazyFileRoute('/portal/competitors')({ component: Com
 const controlClass = 'min-h-11 w-full rounded-lg border border-[#E3E2E6] bg-white px-3 text-sm';
 type OwnedSite = { id: string; name: string; domain: string };
 type MonitorAction = { suffix: string; method: 'POST' | 'PATCH' | 'DELETE'; body?: object };
+type ResearchAction = { suffix: string; method: 'POST' | 'PATCH' | 'PUT'; body?: object };
 const formatTime = (timestamp: number | null): string =>
   timestamp ? new Date(timestamp).toLocaleString() : '尚未检查';
 const labels: Record<keyof CompetitorSnapshot, string> = {
@@ -43,6 +46,13 @@ const statusLabels = {
   unchanged: '未见变化',
   changed: '发现变化',
   error: '检查失败',
+};
+const researchStatusLabels: Record<CompetitorResearchStatus, string> = {
+  inbox: '待整理',
+  focus: '重点关注',
+  watch: '持续观察',
+  parked: '暂缓',
+  discarded: '放弃',
 };
 const errors: Record<string, string> = {
   host_not_approved: '主机尚未获管理员批准',
@@ -378,6 +388,9 @@ function MonitorPanel({
               onAction={action => mutation.mutateAsync(action)}
             />
           )}
+          {!groups.error && (
+            <ResearchLibrary workspaceId={workspaceId} sites={sites} categories={categories} />
+          )}
           <div className="grid gap-4 text-sm md:grid-cols-2">
             <div className="flex gap-3 rounded-xl border border-[#E3E2E6] bg-white p-4">
               <ShieldCheck className="shrink-0 text-[#6b8ead]" size={20} />
@@ -711,6 +724,303 @@ function CategoryManager({
         ))}
       </div>
     </details>
+  );
+}
+
+const splitList = (value: string): string[] =>
+  [...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean))];
+
+function parsePaymentProviders(value: string): CompetitorResearchProfile['paymentProviders'] {
+  const valid = new Set(['confirmed', 'evidence_only', 'disabled', 'unknown']);
+  return splitList(value).map(item => {
+    const [provider, rawStatus] = item.split(':', 2).map(part => part.trim());
+    return {
+      provider,
+      status: valid.has(rawStatus) ? (rawStatus as CompetitorResearchProfile['paymentProviders'][number]['status']) : 'unknown',
+    };
+  });
+}
+
+function ResearchLibrary({
+  workspaceId,
+  sites,
+  categories,
+}: {
+  workspaceId: string;
+  sites: OwnedSite[];
+  categories: CompetitorCategory[];
+}): ReactElement {
+  const client = useQueryClient();
+  const [filter, setFilter] = useState<CompetitorResearchStatus | ''>('');
+  const [brandName, setBrandName] = useState('');
+  const [homepageUrl, setHomepageUrl] = useState('');
+  const [summary, setSummary] = useState('');
+  const [keywords, setKeywords] = useState('');
+  const [payments, setPayments] = useState('');
+  const [sources, setSources] = useState('');
+  const [threadUrl, setThreadUrl] = useState('');
+  const [notes, setNotes] = useState('');
+  const [newStatus, setNewStatus] = useState<CompetitorResearchStatus>('inbox');
+  const research = useQuery({
+    queryKey: ['competitor-research', workspaceId, filter],
+    queryFn: () => api.getCompetitorResearch(workspaceId, filter ? { lifecycleStatus: filter } : {}),
+  });
+  const monitors = useQuery({
+    queryKey: ['competitors', workspaceId, 'research-link-options'],
+    queryFn: () => api.getCompetitors({ workspaceId }),
+  });
+  const mutation = useMutation({
+    mutationFn: (action: ResearchAction) =>
+      api.mutateCompetitor({ workspaceId }, `/research${action.suffix}`, action.method, action.body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
+    },
+  });
+  const create = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      await mutation.mutateAsync({
+        suffix: '',
+        method: 'POST',
+        body: {
+          brandName,
+          homepageUrl,
+          productSummary: summary || null,
+          lifecycleStatus: newStatus,
+          seedKeywords: splitList(keywords),
+          paymentProviders: parsePaymentProviders(payments),
+          sources: splitList(sources).map(url => ({ url, kind: 'manual' })),
+          sourceThreadUrl: threadUrl || null,
+          notes: notes || null,
+        },
+      });
+      setBrandName('');
+      setHomepageUrl('');
+      setSummary('');
+      setKeywords('');
+      setPayments('');
+      setSources('');
+      setThreadUrl('');
+      setNotes('');
+      setNewStatus('inbox');
+    } catch {
+      return;
+    }
+  };
+  const profiles = research.data?.data.profiles ?? [];
+  const canManage = research.data?.data.canManage ?? false;
+  return (
+    <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6" aria-label="竞品研究库">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-[#3D3B4F]">竞品研究库</h2>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
+            保存人工确认的品牌、产品定位、种子词、支付结论与来源。研究档案不会自动创建监控、读取目标网页或启用调度；先手动添加监控，再显式关联。
+          </p>
+        </div>
+        <label className="min-w-40 text-xs">
+          处理状态
+          <select
+            aria-label="筛选研究状态"
+            className={`${controlClass} mt-2`}
+            value={filter}
+            onChange={event => setFilter(event.target.value as CompetitorResearchStatus | '')}
+          >
+            <option value="">全部状态</option>
+            {Object.entries(researchStatusLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {research.error && (
+        <div className="mt-4">
+          <ErrorNotice error={research.error} />
+          <Button className="mt-3" variant="outline" onClick={() => void research.refetch()}>
+            重试读取研究库
+          </Button>
+        </div>
+      )}
+      {mutation.error && <div className="mt-4"><ErrorNotice error={mutation.error} /></div>}
+      {research.isLoading ? (
+        <p role="status" className="mt-5 text-sm text-[#6F6D7A]">正在读取研究档案…</p>
+      ) : (
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-3">
+            {!profiles.length && (
+              <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
+                当前筛选没有研究档案。空列表不代表市场没有竞品。
+              </p>
+            )}
+            {profiles.map(profile => (
+              <ResearchProfileCard
+                key={`${profile.id}:${profile.updatedAt}`}
+                profile={profile}
+                categories={categories}
+                sites={sites}
+                monitors={monitors.data?.data.monitors ?? []}
+                canManage={canManage}
+                pending={mutation.isPending}
+                onAction={action => mutation.mutateAsync(action)}
+              />
+            ))}
+          </div>
+          {canManage ? (
+            <form onSubmit={event => void create(event)} className="h-fit rounded-xl bg-[#F9F8F6] p-4">
+              <h3 className="font-semibold">保存研究结论</h3>
+              <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
+                <label className="text-xs">
+                  品牌 / 网站名称
+                  <Input className="mt-2 min-h-11" value={brandName} onChange={event => setBrandName(event.target.value)} required maxLength={100} placeholder="例如 OpenSourceGen" />
+                </label>
+                <label className="text-xs">
+                  首页公开 HTTPS URL
+                  <Input className="mt-2 min-h-11" type="url" value={homepageUrl} onChange={event => setHomepageUrl(event.target.value)} required maxLength={500} placeholder="https://example.com/" />
+                </label>
+                <label className="text-xs">
+                  初始状态
+                  <select className={`${controlClass} mt-2`} value={newStatus} onChange={event => setNewStatus(event.target.value as CompetitorResearchStatus)}>
+                    {Object.entries(researchStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="text-xs">
+                  产品 / 品类结论
+                  <textarea className={`${controlClass} mt-2 min-h-22 py-2`} value={summary} onChange={event => setSummary(event.target.value)} maxLength={4000} placeholder="例如：开源模型聚合的图片与视频生成工具" />
+                </label>
+                <label className="text-xs">
+                  种子词（逗号或换行分隔）
+                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={keywords} onChange={event => setKeywords(event.target.value)} maxLength={5000} placeholder="AI image generator, AI video generator" />
+                </label>
+                <label className="text-xs">
+                  支付网关（`名称:状态`，状态为 confirmed / evidence_only / disabled / unknown）
+                  <Input className="mt-2 min-h-11" value={payments} onChange={event => setPayments(event.target.value)} maxLength={1200} placeholder="Stripe:confirmed, PayPal:evidence_only" />
+                </label>
+                <label className="text-xs">
+                  证据来源 URL（逗号或换行分隔）
+                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={sources} onChange={event => setSources(event.target.value)} maxLength={5000} placeholder="https://example.com/pricing" />
+                </label>
+                <label className="text-xs">
+                  来源任务 / 备注链接（可选）
+                  <Input className="mt-2 min-h-11" value={threadUrl} onChange={event => setThreadUrl(event.target.value)} maxLength={2048} placeholder="codex://threads/..." />
+                </label>
+                <label className="text-xs">
+                  研究备注（可选）
+                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={notes} onChange={event => setNotes(event.target.value)} maxLength={4000} />
+                </label>
+                <Button type="submit"><Plus size={16} className="mr-2" />保存研究档案</Button>
+              </fieldset>
+            </form>
+          ) : (
+            <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">当前账号只读，可查看研究结论和关联关系。</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ResearchProfileCard({
+  profile,
+  categories,
+  sites,
+  monitors,
+  canManage,
+  pending,
+  onAction,
+}: {
+  profile: CompetitorResearchProfile;
+  categories: CompetitorCategory[];
+  sites: OwnedSite[];
+  monitors: CompetitorMonitor[];
+  canManage: boolean;
+  pending: boolean;
+  onAction: (action: ResearchAction) => Promise<unknown>;
+}): ReactElement {
+  const [status, setStatus] = useState(profile.lifecycleStatus);
+  const [categoryIds, setCategoryIds] = useState(profile.categories.map(category => category.id));
+  const [siteIds, setSiteIds] = useState(profile.sites.map(site => site.id));
+  const [monitorIds, setMonitorIds] = useState(profile.monitors.map(monitor => monitor.id));
+  const saveLinks = async (kind: 'categories' | 'sites' | 'monitors', ids: string[]): Promise<void> => {
+    try {
+      await onAction({ suffix: `/${encodeURIComponent(profile.id)}/${kind}`, method: 'PUT', body: { ids } });
+    } catch {
+      return;
+    }
+  };
+  const selected = (event: FormEvent<HTMLSelectElement>): string[] =>
+    Array.from(event.currentTarget.selectedOptions, option => option.value);
+  return (
+    <article className="rounded-xl border border-[#E3E2E6] bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="break-words font-semibold text-[#3D3B4F]">{profile.brandName}</h3>
+          <a className="mt-1 block break-all text-xs text-[#537695]" href={profile.homepageUrl} target="_blank" rel="noopener noreferrer">{profile.homepageUrl}</a>
+        </div>
+        {canManage ? (
+          <select aria-label={`${profile.brandName}研究状态`} className="min-h-9 rounded-lg border px-2 text-xs" value={status} disabled={pending} onChange={event => {
+            const next = event.target.value as CompetitorResearchStatus;
+            setStatus(next);
+            void onAction({ suffix: `/${encodeURIComponent(profile.id)}`, method: 'PATCH', body: { lifecycleStatus: next } }).catch(() => {
+              setStatus(profile.lifecycleStatus);
+            });
+          }}>
+            {Object.entries(researchStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        ) : <span className="rounded-full bg-[#F9F8F6] px-2 py-1 text-xs">{researchStatusLabels[profile.lifecycleStatus]}</span>}
+      </div>
+      {profile.productSummary && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[#555163]">{profile.productSummary}</p>}
+      <ResearchChips label="种子词" values={profile.seedKeywords} />
+      <ResearchChips label="支付" values={profile.paymentProviders.map(item => `${item.provider} · ${item.status}`)} />
+      <ResearchChips label="业务分类" values={profile.categories.map(category => category.name)} />
+      <ResearchChips label="关联站点" values={profile.sites.map(site => site.name)} />
+      <ResearchChips label="关联监控" values={profile.monitors.map(monitor => monitor.name)} />
+      {profile.sources.length > 0 && <p className="mt-3 break-words text-xs leading-5 text-[#6F6D7A]">证据来源：{profile.sources.map(source => source.url).join(' · ')}</p>}
+      {profile.notes && <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">备注：{profile.notes}</p>}
+      {canManage && (
+        <details className="mt-4 rounded-lg bg-[#F9F8F6] p-3">
+          <summary className="cursor-pointer text-sm font-medium">手动划分与关联</summary>
+          <div className="mt-4 grid gap-3">
+            <ResearchLinkSelect label="业务分类（多选）" value={categoryIds} options={categories.map(category => ({ id: category.id, label: category.name }))} disabled={pending} onChange={event => setCategoryIds(selected(event))} onSave={() => void saveLinks('categories', categoryIds)} />
+            <ResearchLinkSelect label="己方网站（多选）" value={siteIds} options={sites.map(site => ({ id: site.id, label: `${site.name} · ${site.domain}` }))} disabled={pending} onChange={event => setSiteIds(selected(event))} onSave={() => void saveLinks('sites', siteIds)} />
+            <ResearchLinkSelect label="已有监控（多选）" value={monitorIds} options={monitors.map(monitor => ({ id: monitor.id, label: `${monitor.name} · ${monitor.url}` }))} disabled={pending} onChange={event => setMonitorIds(selected(event))} onSave={() => void saveLinks('monitors', monitorIds)} />
+            <p className="text-xs leading-5 text-[#6F6D7A]">研究档案不会新增监控。需监控时先在下方“添加公开页面”中手动创建，并保持手动频率；再回到这里关联该已有记录。</p>
+          </div>
+        </details>
+      )}
+    </article>
+  );
+}
+
+function ResearchChips({ label, values }: { label: string; values: string[] }): ReactElement | null {
+  if (!values.length) return null;
+  return <p className="mt-3 break-words text-xs text-[#6F6D7A]"><span className="mr-2">{label}</span>{values.join(' · ')}</p>;
+}
+
+function ResearchLinkSelect({
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+  onSave,
+}: {
+  label: string;
+  value: string[];
+  options: { id: string; label: string }[];
+  disabled: boolean;
+  onChange: (event: FormEvent<HTMLSelectElement>) => void;
+  onSave: () => void;
+}): ReactElement {
+  return (
+    <label className="text-xs">
+      {label}
+      <select multiple className={`${controlClass} mt-2 min-h-24 py-2`} value={value} disabled={disabled} onChange={onChange}>
+        {options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+      </select>
+      <Button type="button" className="mt-2" size="sm" variant="outline" disabled={disabled} onClick={onSave}>保存关联</Button>
+    </label>
   );
 }
 

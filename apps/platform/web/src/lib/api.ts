@@ -6,6 +6,8 @@ import type {
   CompetitorCheck,
   CompetitorCategory,
   CompetitorFilters,
+  CompetitorResearchFilters,
+  CompetitorResearchReport,
 } from '@traks/shared';
 import type { buildAnalysisPackage } from '@traks/shared';
 import { authClient } from '@/lib/auth-client';
@@ -117,6 +119,21 @@ export const api = {
     await assertOk(response);
     return response.json();
   },
+  async getCompetitorResearch(
+    workspaceId: string,
+    filters: CompetitorResearchFilters = {}
+  ): Promise<{ data: CompetitorResearchReport }> {
+    const query = new URLSearchParams();
+    if (filters.lifecycleStatus) query.set('lifecycleStatus', filters.lifecycleStatus);
+    if (filters.categoryId) query.set('categoryId', filters.categoryId);
+    if (filters.siteId) query.set('siteId', filters.siteId);
+    if (filters.monitorId) query.set('monitorId', filters.monitorId);
+    const response = await fetch(
+      `${competitorRoot({ workspaceId })}/research${query.size ? `?${query}` : ''}`
+    );
+    await assertOk(response);
+    return response.json();
+  },
   async getCompetitorHistory(
     scope: CompetitorScope,
     monitorId: string
@@ -130,7 +147,7 @@ export const api = {
   async mutateCompetitor(
     scope: CompetitorScope,
     suffix: string,
-    method: 'POST' | 'PATCH' | 'DELETE',
+    method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
     body?: object
   ): Promise<unknown> {
     const response = await fetch(`${competitorRoot(scope)}${suffix}`, {

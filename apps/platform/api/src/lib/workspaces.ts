@@ -9,6 +9,7 @@ import {
   workspaces,
   competitorMonitors,
   competitorCategories,
+  competitorResearchProfiles,
 } from '../db/schema';
 
 export const DEFAULT_WORKSPACE_NAME = 'My Workspace';
@@ -116,6 +117,12 @@ export async function workspaceHasCompetitors(
     .where(eq(competitorMonitors.workspaceId, workspaceId))
     .limit(1);
   if (monitors.length) return true;
+  const research = await db
+    .select({ id: competitorResearchProfiles.id })
+    .from(competitorResearchProfiles)
+    .where(eq(competitorResearchProfiles.workspaceId, workspaceId))
+    .limit(1);
+  if (research.length) return true;
   const categories = await db
     .select({ id: competitorCategories.id })
     .from(competitorCategories)

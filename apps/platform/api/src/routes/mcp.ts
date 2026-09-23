@@ -110,6 +110,15 @@ const competitorHistoryArgs = z
   })
   .strict()
   .refine(args => !!args.workspaceId !== !!args.siteId);
+const competitorResearchArgs = z
+  .object({
+    workspaceId: competitorId,
+    lifecycleStatus: z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']).optional(),
+    categoryId: competitorId.optional(),
+    siteId: competitorId.optional(),
+    monitorId: competitorId.optional(),
+  })
+  .strict();
 
 function competitorReadPath(args: Record<string, unknown>, history = false): string {
   const root = args.workspaceId
@@ -119,6 +128,15 @@ function competitorReadPath(args: Record<string, unknown>, history = false): str
   const query = new URLSearchParams();
   if (args.workspaceId && args.siteId) query.set('siteId', String(args.siteId));
   if (args.categoryId) query.set('categoryId', String(args.categoryId));
+  return `${root}${query.size ? `?${query}` : ''}`;
+}
+
+function competitorResearchReadPath(args: Record<string, unknown>): string {
+  const query = new URLSearchParams();
+  for (const key of ['lifecycleStatus', 'categoryId', 'siteId', 'monitorId']) {
+    if (args[key]) query.set(key, String(args[key]));
+  }
+  const root = `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research`;
   return `${root}${query.size ? `?${query}` : ''}`;
 }
 
@@ -146,6 +164,29 @@ const TOOLS: ToolDef[] = [
       method: 'GET',
       path: `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/categories`,
     }),
+  },
+  {
+    name: 'get_competitor_research',
+    description:
+      'Read manually saved competitor research profiles: brand, product summary, seed keywords, payment-provider evidence, sources, lifecycle status, categories, and explicitly linked owned sites or existing monitors. Filters are workspace-scoped. Does not crawl, create a monitor, approve a host, schedule a check, or infer competitor traffic.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: str('Workspace id from list_competitor_workspaces'),
+        lifecycleStatus: {
+          type: 'string',
+          enum: ['inbox', 'focus', 'watch', 'parked', 'discarded'],
+          description: 'Optional manually assigned research lifecycle status',
+        },
+        categoryId: str('Optional category id from get_competitor_categories'),
+        siteId: str('Optional explicitly linked owned site id from list_sites'),
+        monitorId: str('Optional explicitly linked existing monitor id from get_competitor_monitors'),
+      },
+      required: ['workspaceId'],
+      additionalProperties: false,
+    },
+    validateArgs: args => competitorResearchArgs.safeParse(args).success,
+    request: args => ({ method: 'GET', path: competitorResearchReadPath(args) }),
   },
   {
     name: 'get_competitor_monitors',
@@ -547,6 +588,7 @@ export function mcpHandler(dispatch: Dispatch) {
                 'get_competitor_monitors',
                 'get_competitor_history',
                 'get_competitor_categories',
+                'get_competitor_research',
                 'list_competitor_workspaces',
               ].includes(t.name)
                 ? {

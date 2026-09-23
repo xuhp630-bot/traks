@@ -225,6 +225,13 @@
       "when": 1790160968277,
       "tag": "0031_competitor_categories",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1790178267573,
+      "tag": "0032_competitor_research_library",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, index, check } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, index, check, primaryKey } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import type { FunnelStep, SegmentFilters } from '@traks/shared';
@@ -335,6 +335,66 @@ export const competitorCategories = sqliteTable(
   table => [uniqueIndex('competitor_category_name_idx').on(table.workspaceId, table.nameKey)]
 );
 
+export const competitorResearchProfiles = sqliteTable(
+  'competitor_research_profiles',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    brandName: text('brand_name').notNull(),
+    homepageUrl: text('homepage_url').notNull(),
+    hostname: text('hostname').notNull(),
+    pageTitle: text('page_title'),
+    productSummary: text('product_summary'),
+    lifecycleStatus: text('lifecycle_status').notNull().default('inbox'),
+    seedKeywords: text('seed_keywords').notNull().default('[]'),
+    paymentProviders: text('payment_providers').notNull().default('[]'),
+    sources: text('sources').notNull().default('[]'),
+    sourceThreadUrl: text('source_thread_url'),
+    notes: text('notes'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  table => [
+    uniqueIndex('competitor_research_workspace_url_idx').on(table.workspaceId, table.homepageUrl),
+    index('competitor_research_workspace_status_idx').on(table.workspaceId, table.lifecycleStatus),
+    index('competitor_research_hostname_idx').on(table.hostname),
+  ]
+);
+
+export const competitorResearchCategoryLinks = sqliteTable(
+  'competitor_research_category_links',
+  {
+    profileId: text('profile_id')
+      .notNull()
+      .references(() => competitorResearchProfiles.id, { onDelete: 'cascade' }),
+    categoryId: text('category_id')
+      .notNull()
+      .references(() => competitorCategories.id, { onDelete: 'cascade' }),
+  },
+  table => [
+    primaryKey({ columns: [table.profileId, table.categoryId] }),
+    index('competitor_research_category_profile_idx').on(table.categoryId, table.profileId),
+  ]
+);
+
+export const competitorResearchSiteLinks = sqliteTable(
+  'competitor_research_site_links',
+  {
+    profileId: text('profile_id')
+      .notNull()
+      .references(() => competitorResearchProfiles.id, { onDelete: 'cascade' }),
+    siteId: text('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+  },
+  table => [
+    primaryKey({ columns: [table.profileId, table.siteId] }),
+    index('competitor_research_site_profile_idx').on(table.siteId, table.profileId),
+  ]
+);
+
 export const competitorMonitors = sqliteTable(
   'competitor_monitors',
   {
@@ -366,6 +426,22 @@ export const competitorMonitors = sqliteTable(
     index('competitor_category_idx').on(table.categoryId),
     index('competitor_due_idx').on(table.nextCheckAt),
     index('competitor_host_check_idx').on(table.hostname, table.lastCheckedAt),
+  ]
+);
+
+export const competitorResearchMonitorLinks = sqliteTable(
+  'competitor_research_monitor_links',
+  {
+    profileId: text('profile_id')
+      .notNull()
+      .references(() => competitorResearchProfiles.id, { onDelete: 'cascade' }),
+    monitorId: text('monitor_id')
+      .notNull()
+      .references(() => competitorMonitors.id, { onDelete: 'cascade' }),
+  },
+  table => [
+    primaryKey({ columns: [table.profileId, table.monitorId] }),
+    uniqueIndex('competitor_research_monitor_once_idx').on(table.monitorId),
   ]
 );
 

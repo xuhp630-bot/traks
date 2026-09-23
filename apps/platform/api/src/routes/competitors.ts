@@ -7,6 +7,10 @@ import {
   competitorCategoryInput,
   competitorFilters,
   competitorUpdate,
+  competitorResearchFilters,
+  competitorResearchInput,
+  competitorResearchLinksInput,
+  competitorResearchUpdate,
   COMPETITOR_LIMITS,
 } from '@traks/shared';
 import type { z } from 'zod';
@@ -25,6 +29,13 @@ import {
   nextCompetitorCheck,
   type CompetitorScope,
 } from '../lib/competitors';
+import {
+  competitorResearchReport,
+  replaceResearchCategoryLinks,
+  replaceResearchMonitorLinks,
+  replaceResearchSiteLinks,
+  researchProfileExists,
+} from '../lib/competitor-research';
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Variables }>;
 type Access = {
@@ -154,6 +165,216 @@ async function createMonitor(
       409
     );
   return c.json({ data: { id } }, 201);
+}
+
+async function validateResearchFilters(
+  c: Ctx,
+  workspaceId: string,
+  filters: z.infer<typeof competitorResearchFilters>
+): Promise<Response | null> {
+  const category = await validateReferences(c, workspaceId, null, filters.categoryId ?? null);
+  if (category) return category;
+  const site = await validateReferences(c, workspaceId, filters.siteId ?? null, null);
+  if (site) return site;
+  if (filters.monitorId) {
+    const scope = competitorScope({ workspaceId });
+    const monitor = await c.env.DB.prepare(
+      `SELECT id FROM competitor_monitors WHERE id = ? AND ${scope.sql}`
+    )
+      .bind(filters.monitorId, ...scope.values)
+      .first();
+    if (!monitor) return c.json({ error: 'Monitor not found in this workspace' }, 404);
+  }
+  return null;
+}
+
+async function validateResearchLinks(
+  c: Ctx,
+  workspaceId: string,
+  kind: 'categories' | 'sites' | 'monitors',
+  ids: string[]
+): Promise<Response | null> {
+  if (!ids.length) return null;
+  const placeholders = ids.map(() => '?').join(',');
+  let rows: { results: { id: string }[] };
+  if (kind === 'categories') {
+    rows = await c.env.DB.prepare(
+      `SELECT id FROM competitor_categories WHERE workspace_id = ? AND id IN (${placeholders})`
+    )
+      .bind(workspaceId, ...ids)
+      .all<{ id: string }>();
+  } else if (kind === 'sites') {
+    rows = await c.env.DB.prepare(
+      `SELECT id FROM sites WHERE workspace_id = ? AND id IN (${placeholders})`
+    )
+      .bind(workspaceId, ...ids)
+      .all<{ id: string }>();
+  } else {
+    const scope = competitorScope({ workspaceId });
+    rows = await c.env.DB.prepare(
+      `SELECT id FROM competitor_monitors WHERE id IN (${placeholders}) AND ${scope.sql}`
+    )
+      .bind(...ids, ...scope.values)
+      .all<{ id: string }>();
+  }
+  if (rows.results.length !== ids.length)
+    return c.json({ error: `One or more ${kind} are outside this workspace` }, 404);
+  return null;
+}
+
+function researchRoutes() {
+  return new Hono<{ Bindings: Bindings; Variables: Variables }>()
+    .get('/', validate('query', competitorResearchFilters), async c => {
+      const scope = await access(c);
+      if (scope instanceof Response) return scope;
+      const filters = c.req.valid('query');
+      const invalid = await validateResearchFilters(c, scope.workspaceId!, filters);
+      if (invalid) return invalid;
+      return c.json({
+        data: await competitorResearchReport(c.env.DB, scope.workspaceId!, filters, scope.canManage),
+      });
+    })
+    .post('/', validate('json', competitorResearchInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const body = c.req.valid('json');
+      let url: URL;
+      try {
+        url = publicPageUrl(body.homepageUrl);
+      } catch (error) {
+        return c.json(
+          { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+          400
+        );
+      }
+      const now = Date.now();
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,seed_keywords,payment_providers,sources,source_thread_url,notes,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+      )
+        .bind(
+          id,
+          scope.workspaceId,
+          body.brandName,
+          url.href,
+          url.hostname,
+          body.pageTitle,
+          body.productSummary,
+          body.lifecycleStatus,
+          JSON.stringify(body.seedKeywords),
+          JSON.stringify(body.paymentProviders),
+          JSON.stringify(body.sources),
+          body.sourceThreadUrl,
+          body.notes,
+          now,
+          now,
+          scope.workspaceId,
+          COMPETITOR_LIMITS.researchProfiles
+        )
+        .first();
+      if (!created)
+        return c.json({ error: 'Duplicate homepage URL or 500-profile workspace limit reached' }, 409);
+      return c.json({ data: { id } }, 201);
+    })
+    .patch('/:profileId', validate('json', competitorResearchUpdate), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
+        return c.json({ error: 'Research profile not found' }, 404);
+      const body = c.req.valid('json');
+      const assignments: string[] = [];
+      const values: (string | number | null)[] = [];
+      if (body.brandName !== undefined) {
+        assignments.push('brand_name = ?');
+        values.push(body.brandName);
+      }
+      if (body.homepageUrl !== undefined) {
+        let url: URL;
+        try {
+          url = publicPageUrl(body.homepageUrl);
+        } catch (error) {
+          return c.json(
+            { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+            400
+          );
+        }
+        assignments.push('homepage_url = ?', 'hostname = ?');
+        values.push(url.href, url.hostname);
+      }
+      const fields = [
+        ['pageTitle', 'page_title'],
+        ['productSummary', 'product_summary'],
+        ['lifecycleStatus', 'lifecycle_status'],
+        ['sourceThreadUrl', 'source_thread_url'],
+        ['notes', 'notes'],
+      ] as const;
+      for (const [key, column] of fields) {
+        if (body[key] !== undefined) {
+          assignments.push(`${column} = ?`);
+          values.push(body[key] as string | null);
+        }
+      }
+      for (const [key, column] of [
+        ['seedKeywords', 'seed_keywords'],
+        ['paymentProviders', 'payment_providers'],
+        ['sources', 'sources'],
+      ] as const) {
+        if (body[key] !== undefined) {
+          assignments.push(`${column} = ?`);
+          values.push(JSON.stringify(body[key]));
+        }
+      }
+      const result = await c.env.DB.prepare(
+        `UPDATE competitor_research_profiles SET ${assignments.join(', ')}, updated_at = ? WHERE id = ? AND workspace_id = ? RETURNING id`
+      )
+        .bind(...values, Date.now(), id, scope.workspaceId)
+        .first();
+      if (!result) return c.json({ error: 'Research profile changed or duplicate homepage URL' }, 409);
+      return c.json({ data: result });
+    })
+    .put('/:profileId/categories', validate('json', competitorResearchLinksInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
+        return c.json({ error: 'Research profile not found' }, 404);
+      const { ids } = c.req.valid('json');
+      if (ids.length > COMPETITOR_LIMITS.researchCategoryLinks)
+        return c.json({ error: 'Too many research category links' }, 400);
+      const invalid = await validateResearchLinks(c, scope.workspaceId!, 'categories', ids);
+      if (invalid) return invalid;
+      await replaceResearchCategoryLinks(c.env.DB, id, ids);
+      return c.json({ data: { id, categoryIds: ids } });
+    })
+    .put('/:profileId/sites', validate('json', competitorResearchLinksInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
+        return c.json({ error: 'Research profile not found' }, 404);
+      const { ids } = c.req.valid('json');
+      if (ids.length > COMPETITOR_LIMITS.researchSiteLinks)
+        return c.json({ error: 'Too many owned-site links' }, 400);
+      const invalid = await validateResearchLinks(c, scope.workspaceId!, 'sites', ids);
+      if (invalid) return invalid;
+      await replaceResearchSiteLinks(c.env.DB, id, ids);
+      return c.json({ data: { id, siteIds: ids } });
+    })
+    .put('/:profileId/monitors', validate('json', competitorResearchLinksInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
+        return c.json({ error: 'Research profile not found' }, 404);
+      const { ids } = c.req.valid('json');
+      if (ids.length > COMPETITOR_LIMITS.researchMonitorLinks)
+        return c.json({ error: 'Too many monitor links' }, 400);
+      const invalid = await validateResearchLinks(c, scope.workspaceId!, 'monitors', ids);
+      if (invalid) return invalid;
+      await replaceResearchMonitorLinks(c.env.DB, id, ids);
+      return c.json({ data: { id, monitorIds: ids } });
+    });
 }
 
 function monitorRoutes() {
@@ -402,5 +623,6 @@ export const competitorsRoute = app
     return c.json({ data: rows.results });
   })
   .route('/workspaces/:workspaceId/categories', categoryRoutes)
+  .route('/workspaces/:workspaceId/research', researchRoutes())
   .route('/workspaces/:workspaceId', monitorRoutes())
   .route('/:siteId', monitorRoutes());

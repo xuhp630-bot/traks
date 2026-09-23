@@ -124,6 +124,7 @@ after(async () => {
   await runtime?.dispose();
 });
 beforeEach(async () => {
+  await database.prepare('DELETE FROM competitor_research_profiles').run();
   await database.prepare('DELETE FROM competitor_monitors').run();
   await database.prepare('DELETE FROM competitor_categories').run();
 });
@@ -600,6 +601,7 @@ test('MCP competitor tools are scoped read-only views and never start a check', 
     'get_competitor_categories',
     'get_competitor_history',
     'get_competitor_monitors',
+    'get_competitor_research',
     'list_competitor_workspaces',
   ]);
   assert.ok(tools.every(tool => tool.annotations.readOnlyHint));
@@ -737,6 +739,23 @@ async function independent(extra: object = {}) {
   return (await response.json()).data.id as string;
 }
 
+async function researchProfile(extra: object = {}) {
+  const response = await request(`${workspaceRoot}/research`, 'POST', {
+    brandName: 'OpenSourceGen',
+    homepageUrl: 'https://fixture.example.com/research',
+    productSummary: 'Synthetic manual research only',
+    lifecycleStatus: 'inbox',
+    seedKeywords: ['AI image generator'],
+    paymentProviders: [],
+    sources: [],
+    sourceThreadUrl: null,
+    notes: null,
+    ...extra,
+  });
+  assert.equal(response.status, 201);
+  return (await response.json()).data.id as string;
+}
+
 test('category rename/delete and same-workspace reassignment preserve all evidence and the success baseline', async () => {
   const categoryId = await category();
   const id = await independent({ categoryId });
@@ -864,6 +883,164 @@ test('workspace API rejects cross-tenant sites, categories, monitors and token a
   assert.equal(
     (await request(`${workspaceRoot}/categories/outside-category`, 'DELETE')).status,
     404
+  );
+});
+
+test('research library keeps manual evidence workspace-scoped and only links an existing monitor', async () => {
+  const categoryId = await category('AI image tools');
+  const monitorId = await independent({ categoryId, cadence: 'manual' });
+  const before = await database
+    .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+    .bind('workspace')
+    .first<{ count: number }>();
+  const profileId = await researchProfile({
+    lifecycleStatus: 'focus',
+    seedKeywords: ['AI image generator', 'open source image model'],
+    paymentProviders: [
+      { provider: 'Stripe', status: 'evidence_only', evidence: 'Manual pricing-page review' },
+    ],
+    sources: [
+      {
+        url: 'https://fixture.example.com/pricing',
+        kind: 'pricing',
+        note: 'Synthetic local source',
+      },
+    ],
+    sourceThreadUrl: 'codex://threads/local-fixture',
+    notes: 'Not a network capture.',
+  });
+  assert.deepEqual(
+    await database
+      .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+      .bind('workspace')
+      .first<{ count: number }>(),
+    before
+  );
+  for (const [suffix, ids] of [
+    ['categories', [categoryId]],
+    ['sites', ['site']],
+    ['monitors', [monitorId]],
+  ] as const)
+    assert.equal(
+      (await request(`${workspaceRoot}/research/${profileId}/${suffix}`, 'PUT', { ids })).status,
+      200
+    );
+  const report = (await (await request(`${workspaceRoot}/research?lifecycleStatus=focus`)).json())
+    .data;
+  assert.equal(report.source, 'manual_research_library');
+  assert.equal(report.schedulerEnabled, undefined);
+  assert.equal(report.profiles.length, 1);
+  assert.deepEqual(report.profiles[0].seedKeywords, [
+    'AI image generator',
+    'open source image model',
+  ]);
+  assert.deepEqual(report.profiles[0].paymentProviders, [
+    { provider: 'Stripe', status: 'evidence_only', evidence: 'Manual pricing-page review' },
+  ]);
+  assert.deepEqual(report.profiles[0].categories.map((item: { id: string }) => item.id), [categoryId]);
+  assert.deepEqual(report.profiles[0].sites.map((item: { id: string }) => item.id), ['site']);
+  assert.deepEqual(report.profiles[0].monitors.map((item: { id: string }) => item.id), [monitorId]);
+  assert.equal(
+    (await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {})).status,
+    400
+  );
+  assert.equal(
+    (await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Updated' })).status,
+    200
+  );
+});
+
+test('research profiles reject foreign links, write attempts from non-owners and duplicate workspace URLs', async () => {
+  const profileId = await researchProfile();
+  await database.batch([
+    database.prepare(
+      "INSERT INTO competitor_categories (id,workspace_id,name,name_key,created_at) VALUES ('outside-category','outside','Outside','outside',0)"
+    ),
+    database.prepare(
+      "INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,lifecycle_status,seed_keywords,payment_providers,sources,created_at,updated_at) VALUES ('outside-research','outside','Outside','https://outside.fixture.test/','outside.fixture.test','inbox','[]','[]','[]',0,0)"
+    ),
+  ]);
+  await monitor('outside-monitor', 'outside.fixture.test', 'manual', null, 'outside-site');
+  for (const [suffix, ids] of [
+    ['categories', ['outside-category']],
+    ['sites', ['outside-site']],
+    ['monitors', ['outside-monitor']],
+  ] as const)
+    assert.equal(
+      (await request(`${workspaceRoot}/research/${profileId}/${suffix}`, 'PUT', { ids })).status,
+      404
+    );
+  assert.equal((await request(`${workspaceRoot}/research?monitorId=outside-monitor`)).status, 404);
+  assert.equal(
+    (await request(`${workspaceRoot}/research`, 'POST', {
+      brandName: 'Duplicate',
+      homepageUrl: 'https://fixture.example.com/research',
+      seedKeywords: [],
+      paymentProviders: [],
+      sources: [],
+    })).status,
+    409
+  );
+  for (const token of ['member', 'reader']) {
+    assert.equal((await request(`${workspaceRoot}/research`, 'GET', undefined, token)).status, 200);
+    for (const [path, method, body] of [
+      [`${workspaceRoot}/research`, 'POST', {
+        brandName: 'Blocked',
+        homepageUrl: 'https://fixture.example.com/blocked',
+        seedKeywords: [],
+        paymentProviders: [],
+        sources: [],
+      }],
+      [`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Blocked' }],
+      [`${workspaceRoot}/research/${profileId}/categories`, 'PUT', { ids: [] }],
+    ] as const)
+      assert.equal((await request(path, method, body, token)).status, 403);
+  }
+});
+
+test('research profile limit and cascade cleanup protect bounded D1 metadata storage', async () => {
+  await database.batch(
+    Array.from({ length: 500 }, (_, index) =>
+      database
+        .prepare(
+          'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,lifecycle_status,seed_keywords,payment_providers,sources,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+        )
+        .bind(
+          `research-limit-${index}`,
+          'workspace',
+          `Research ${index}`,
+          `https://fixture.example.com/research-${index}`,
+          'fixture.example.com',
+          'inbox',
+          '[]',
+          '[]',
+          '[]',
+          index,
+          index
+        )
+    )
+  );
+  assert.equal((await request(`${workspaceRoot}/research`, 'POST', {
+    brandName: 'One too many',
+    homepageUrl: 'https://fixture.example.com/research-overflow',
+    seedKeywords: [],
+    paymentProviders: [],
+    sources: [],
+  })).status, 409);
+  await database.prepare("DELETE FROM competitor_research_profiles WHERE workspace_id = 'workspace'").run();
+  await database.batch([
+    database.prepare(
+      "INSERT INTO workspaces (id,name,slug) VALUES ('research-storage','Research storage','research-storage')"
+    ),
+    database.prepare(
+      "INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,lifecycle_status,seed_keywords,payment_providers,sources,created_at,updated_at) VALUES ('research-cascade','research-storage','Cascade','https://cascade.fixture.test/','cascade.fixture.test','inbox','[]','[]','[]',0,0)"
+    ),
+  ]);
+  await database.prepare("DELETE FROM workspaces WHERE id = 'research-storage'").run();
+  assert.equal(
+    (await database.prepare("SELECT count(*) AS count FROM competitor_research_profiles WHERE id = 'research-cascade'").first<{ count: number }>())
+      ?.count,
+    0
   );
 });
 
@@ -1015,6 +1192,7 @@ test('workspace-only competitor data survives orphan cleanup', async () => {
 test('workspace MCP discovers scoped categories, filters evidence and rejects malformed/foreign arguments without fetching', async () => {
   const categoryId = await category();
   const monitorId = await independent({ categoryId });
+  const profileId = await researchProfile({ lifecycleStatus: 'watch' });
   async function call(name: string, args: unknown) {
     return (
       await (
@@ -1037,8 +1215,16 @@ test('workspace MCP discovers scoped categories, filters evidence and rejects ma
     ['get_competitor_categories', { workspaceId: 'workspace' }],
     ['get_competitor_monitors', { workspaceId: 'workspace', categoryId, siteId: 'unlinked' }],
     ['get_competitor_history', { workspaceId: 'workspace', monitorId }],
+    ['get_competitor_research', { workspaceId: 'workspace', lifecycleStatus: 'watch' }],
   ] as const)
     assert.equal((await call(name, args)).isError, false);
+  const research = await call('get_competitor_research', {
+    workspaceId: 'workspace',
+    lifecycleStatus: 'watch',
+  });
+  assert.deepEqual(JSON.parse(research.content[0].text).data.profiles.map((item: { id: string }) => item.id), [
+    profileId,
+  ]);
   for (const args of [
     {},
     null,
@@ -1052,6 +1238,14 @@ test('workspace MCP discovers scoped categories, filters evidence and rejects ma
     { workspaceId: 'workspace', runScan: true },
   ])
     assert.equal((await call('get_competitor_monitors', args)).isError, true);
+  for (const args of [
+    {},
+    { workspaceId: 'outside' },
+    { workspaceId: 'workspace', lifecycleStatus: 'invalid' },
+    { workspaceId: 'workspace', monitorId: 'outside-monitor' },
+    { workspaceId: 'workspace', runScan: true },
+  ])
+    assert.equal((await call('get_competitor_research', args)).isError, true);
   assert.equal(
     (await call('get_competitor_history', { workspaceId: 'workspace', siteId: 'site', monitorId }))
       .isError,
