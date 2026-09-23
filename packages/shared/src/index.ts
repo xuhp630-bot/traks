@@ -10,3 +10,4 @@ export * from './quality-actions';
 export * from './quality-brief';
 export * from './quality-growth';
 export * from './quality-entry-funnels';
+export * from './competitors';

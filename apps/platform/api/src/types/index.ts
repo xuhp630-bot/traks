@@ -1,4 +1,6 @@
 export type Bindings = {
+  COMPETITOR_ALLOWED_HOSTS?: string;
+  COMPETITOR_SCHEDULE_ENABLED?: string;
   CRM_QUALITY_INTEGRATIONS?: string;
   DB: D1Database;
   /** Static assets (web SPA); absent in local dev where vite serves the SPA. */

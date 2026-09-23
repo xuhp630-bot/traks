@@ -15,6 +15,8 @@ import { tokensRoute } from './routes/tokens';
 import { mcpHandler } from './routes/mcp';
 import { requireAuth, sessionOnly } from './middleware/auth';
 import { runPrewarm } from './lib/prewarm';
+import { competitorsRoute } from './routes/competitors';
+import { runCompetitorSchedule } from './lib/competitors';
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
@@ -133,6 +135,7 @@ const routes = app
   .route('/api/invitations', invitationsRoute)
   .route('/api/sites', sitesRoute)
   .route('/api/analytics', analyticsRoute)
+  .route('/api/competitors', competitorsRoute)
   .route('/api/tokens', tokensRoute);
 
 // MCP endpoint (Streamable HTTP, stateless): registered after the routes it
@@ -166,5 +169,10 @@ export default {
   /** Every minute: keep recently viewed dashboards fresh (lib/prewarm.ts). */
   scheduled(_event: ScheduledEvent, env: Bindings, ctx: ExecutionContext): void {
     ctx.waitUntil(runPrewarm(app, env, ctx));
+    ctx.waitUntil(
+      runCompetitorSchedule(env).catch(() => {
+        console.error('competitor_schedule_failed');
+      })
+    );
   },
 };

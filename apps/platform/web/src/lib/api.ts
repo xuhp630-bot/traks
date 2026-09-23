@@ -1,6 +1,7 @@
 import { hc, type InferResponseType } from 'hono/client';
 import type { AppType } from '@traks/platform-api';
 import type { Period, EvidencePage } from '@traks/shared';
+import type { CompetitorReport, CompetitorCheck } from '@traks/shared';
 import type { buildAnalysisPackage } from '@traks/shared';
 import { authClient } from '@/lib/auth-client';
 
@@ -88,6 +89,36 @@ function slugify(name: string): string {
 }
 
 export const api = {
+  async getCompetitors(siteId: string): Promise<{ data: CompetitorReport }> {
+    const response = await fetch(`/api/competitors/${encodeURIComponent(siteId)}`);
+    await assertOk(response);
+    return response.json();
+  },
+  async getCompetitorHistory(
+    siteId: string,
+    monitorId: string
+  ): Promise<{ data: { checks: CompetitorCheck[] } }> {
+    const response = await fetch(
+      `/api/competitors/${encodeURIComponent(siteId)}/${encodeURIComponent(monitorId)}/history`
+    );
+    await assertOk(response);
+    return response.json();
+  },
+  async mutateCompetitor(
+    siteId: string,
+    suffix: string,
+    method: 'POST' | 'PATCH' | 'DELETE',
+    body?: object
+  ): Promise<unknown> {
+    const response = await fetch(`/api/competitors/${encodeURIComponent(siteId)}${suffix}`, {
+      method,
+      ...(body
+        ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+        : {}),
+    });
+    await assertOk(response);
+    return response.json();
+  },
   async getQualityInsights(
     siteId: string,
     period: Period,

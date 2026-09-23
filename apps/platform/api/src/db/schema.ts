@@ -319,3 +319,48 @@ export const eventCatalogs = sqliteTable(
     index('event_catalogs_site_id_idx').on(table.siteId),
   ]
 );
+
+export const competitorMonitors = sqliteTable(
+  'competitor_monitors',
+  {
+    id: text('id').primaryKey(),
+    siteId: text('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    url: text('url').notNull(),
+    hostname: text('hostname').notNull(),
+    selector: text('selector').notNull(),
+    cadence: text('cadence').notNull().default('manual'),
+    createdAt: integer('created_at').notNull(),
+    nextCheckAt: integer('next_check_at'),
+    lastCheckedAt: integer('last_checked_at'),
+    lastSuccessAt: integer('last_success_at'),
+    lastSuccessSnapshot: text('last_success_snapshot'),
+    leaseUntil: integer('lease_until').notNull().default(0),
+  },
+  table => [
+    uniqueIndex('competitor_site_url_idx').on(table.siteId, table.url),
+    index('competitor_due_idx').on(table.nextCheckAt),
+    index('competitor_host_check_idx').on(table.hostname, table.lastCheckedAt),
+  ]
+);
+
+export const competitorSnapshots = sqliteTable(
+  'competitor_snapshots',
+  {
+    id: text('id').primaryKey(),
+    monitorId: text('monitor_id')
+      .notNull()
+      .references(() => competitorMonitors.id, { onDelete: 'cascade' }),
+    checkedAt: integer('checked_at').notNull(),
+    status: text('status').notNull(),
+    errorCode: text('error_code'),
+    httpStatus: integer('http_status'),
+    snapshot: text('snapshot'),
+    previous: text('previous'),
+    previousCheckedAt: integer('previous_checked_at'),
+    changes: text('changes').notNull(),
+  },
+  table => [index('competitor_snapshot_monitor_time_idx').on(table.monitorId, table.checkedAt)]
+);

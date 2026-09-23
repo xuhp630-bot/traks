@@ -107,14 +107,15 @@ function PortalHeader(): React.ReactNode {
           </Link>
           <BreadcrumbSlash />
           <WorkspaceSwitcher />
-          <div className="hidden md:block">
+          <div className="hidden xl:block">
             <BreadcrumbSlash />
           </div>
-          <nav className="hidden h-full items-center gap-0.5 md:flex" aria-label="Main navigation">
+          <nav className="hidden h-full items-center gap-0.5 xl:flex" aria-label="Main navigation">
             <HeaderTab to="/portal/sites" alsoMatchPaths={['/portal/site/']}>
               Sites
             </HeaderTab>
             <HeaderTab to="/portal/skill">Skill</HeaderTab>
+            <HeaderTab to="/portal/competitors">Competitors</HeaderTab>
             <HeaderTab to="/portal/mcp">MCP server</HeaderTab>
             {current?.role === 'owner' && <HeaderTab to="/portal/members">Members</HeaderTab>}
             <HeaderTab to="/portal/settings">Settings</HeaderTab>
@@ -122,14 +123,14 @@ function PortalHeader(): React.ReactNode {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <VersionPill />
-          <div className="md:hidden">
+          <div className="xl:hidden">
             <DropdownMenu open={navigationOpen} onOpenChange={setNavigationOpen}>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
                   aria-label="Open navigation"
                   aria-expanded={navigationOpen}
-                  className="flex h-11 w-11 items-center justify-center rounded-full text-[#3D3B4F] hover:bg-muted md:hidden"
+                  className="flex h-11 w-11 items-center justify-center rounded-full text-[#3D3B4F] hover:bg-muted xl:hidden"
                 >
                   <Menu className="h-5 w-5" />
                 </button>
@@ -138,6 +139,7 @@ function PortalHeader(): React.ReactNode {
                 {[
                   { to: '/portal/sites', label: 'Sites' },
                   { to: '/portal/skill', label: 'Skill' },
+                  { to: '/portal/competitors', label: 'Competitors / 竞品监控' },
                   { to: '/portal/mcp', label: 'MCP server' },
                   ...(current?.role === 'owner'
                     ? [{ to: '/portal/members', label: 'Members' }]
