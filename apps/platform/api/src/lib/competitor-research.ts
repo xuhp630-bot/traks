@@ -46,10 +46,14 @@ export async function replaceResearchCategoryLinks(
   categoryIds: string[]
 ): Promise<void> {
   await db.batch([
-    db.prepare('DELETE FROM competitor_research_category_links WHERE profile_id = ?').bind(profileId),
+    db
+      .prepare('DELETE FROM competitor_research_category_links WHERE profile_id = ?')
+      .bind(profileId),
     ...categoryIds.map(categoryId =>
       db
-        .prepare('INSERT INTO competitor_research_category_links (profile_id, category_id) VALUES (?, ?)')
+        .prepare(
+          'INSERT INTO competitor_research_category_links (profile_id, category_id) VALUES (?, ?)'
+        )
         .bind(profileId, categoryId)
     ),
   ]);
@@ -76,10 +80,14 @@ export async function replaceResearchMonitorLinks(
   monitorIds: string[]
 ): Promise<void> {
   await db.batch([
-    db.prepare('DELETE FROM competitor_research_monitor_links WHERE profile_id = ?').bind(profileId),
+    db
+      .prepare('DELETE FROM competitor_research_monitor_links WHERE profile_id = ?')
+      .bind(profileId),
     ...monitorIds.map(monitorId =>
       db
-        .prepare('INSERT INTO competitor_research_monitor_links (profile_id, monitor_id) VALUES (?, ?)')
+        .prepare(
+          'INSERT INTO competitor_research_monitor_links (profile_id, monitor_id) VALUES (?, ?)'
+        )
         .bind(profileId, monitorId)
     ),
   ]);

@@ -19,6 +19,7 @@ import {
   runCompetitorSchedule,
   HOST_COOLDOWN_MS,
 } from '../apps/platform/api/src/lib/competitors';
+import { generateCompetitorResearchDraft } from '../apps/platform/api/src/lib/competitor-research-draft';
 import { hashToken } from '../apps/platform/api/src/lib/tokens';
 import type { Bindings } from '../apps/platform/api/src/types';
 import {
@@ -44,6 +45,20 @@ const success = async () => ({ snapshot, httpStatus: 200 });
 const failure = async () => {
   throw new CompetitorFetchError('http_error', 503);
 };
+const draftInput = {
+  homepageUrl: 'https://fixture.example.com/research',
+  brandName: 'Fixture Studio',
+  pageTitle: 'AI image helper',
+  productSummary: 'A manually supplied image workflow note.',
+  seedKeywords: ['AI image generator'],
+};
+const draftCompletion = (draft: object, status = 200): Response =>
+  new Response(
+    JSON.stringify(
+      status === 200 ? { choices: [{ message: { content: JSON.stringify(draft) } }] } : { error: 'fixture' }
+    ),
+    { status, headers: { 'content-type': 'application/json' } }
+  );
 
 before(async () => {
   const bundle = await build({
@@ -124,6 +139,8 @@ after(async () => {
   await runtime?.dispose();
 });
 beforeEach(async () => {
+  await database.prepare('DELETE FROM competitor_pre_research_actions').run();
+  await database.prepare('DELETE FROM competitor_pre_research_runs').run();
   await database.prepare('DELETE FROM competitor_research_profiles').run();
   await database.prepare('DELETE FROM competitor_monitors').run();
   await database.prepare('DELETE FROM competitor_categories').run();
@@ -601,6 +618,7 @@ test('MCP competitor tools are scoped read-only views and never start a check', 
     'get_competitor_categories',
     'get_competitor_history',
     'get_competitor_monitors',
+    'get_competitor_pre_research',
     'get_competitor_research',
     'list_competitor_workspaces',
   ]);
@@ -756,6 +774,102 @@ async function researchProfile(extra: object = {}) {
   return (await response.json()).data.id as string;
 }
 
+test('AI research draft uses GLM-5.3 first and keeps payment candidates unconfirmed', async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const result = await generateCompetitorResearchDraft(
+    { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+    draftInput,
+    {
+      now: () => instant,
+      fetcher: (async (url, init) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+        return draftCompletion({
+          brandName: 'Fixture Studio',
+          pageTitle: 'AI image helper',
+          productSummary: 'An AI image workflow draft.',
+          seedKeywords: ['AI image generator', 'AI image generator'],
+          paymentProviderCandidates: ['Stripe', 'stripe'],
+          evidenceGaps: ['Verify pricing and checkout manually'],
+        });
+      }) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.data.provider, 'glm');
+  assert.equal(result.data.model, 'glm-5.3');
+  assert.equal(result.data.generatedAt, instant);
+  assert.deepEqual(result.data.draft.seedKeywords, ['AI image generator']);
+  assert.deepEqual(result.data.draft.paymentProviders, [{ provider: 'Stripe', status: 'unknown' }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
+  assert.equal(calls[0].body.model, 'glm-5.3');
+  assert.deepEqual(calls[0].body.response_format, { type: 'json_object' });
+});
+
+test('AI research draft falls back to the configured Terra bridge after GLM fails', async () => {
+  const calls: string[] = [];
+  const result = await generateCompetitorResearchDraft(
+    {
+      COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key',
+      COMPETITOR_RESEARCH_TERRA_API_KEY: 'fixture-terra-key',
+      COMPETITOR_RESEARCH_TERRA_API_URL: 'https://terra.fixture.test/v1/chat/completions',
+      COMPETITOR_RESEARCH_TERRA_MODEL: 'gpt-5.6-terra',
+    } as Bindings,
+    draftInput,
+    {
+      fetcher: (async url => {
+        calls.push(String(url));
+        if (calls.length === 1) return draftCompletion({}, 503);
+        return draftCompletion({
+          brandName: 'Fixture Studio',
+          pageTitle: null,
+          productSummary: 'Fallback draft.',
+          seedKeywords: ['image workflow'],
+          paymentProviderCandidates: [],
+          evidenceGaps: [],
+        });
+      }) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.data.provider, 'terra');
+  assert.deepEqual(result.data.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'unavailable' },
+    { provider: 'terra', model: 'gpt-5.6-terra', outcome: 'succeeded' },
+  ]);
+  assert.deepEqual(calls, [
+    'https://api.z.ai/api/paas/v4/chat/completions',
+    'https://terra.fixture.test/v1/chat/completions',
+  ]);
+});
+
+test('AI research draft reports missing providers and timeouts without silently saving', async () => {
+  const unconfigured = await generateCompetitorResearchDraft({} as Bindings, draftInput);
+  assert.equal(unconfigured.ok, false);
+  if (unconfigured.ok) return;
+  assert.deepEqual(unconfigured.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'skipped', reason: 'not_configured' },
+    { provider: 'terra', model: 'unconfigured', outcome: 'skipped', reason: 'not_configured' },
+  ]);
+  const timeout = await generateCompetitorResearchDraft(
+    { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+    draftInput,
+    {
+      timeoutMs: 1,
+      fetcher: ((_, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('', 'AbortError')));
+        })) as typeof fetch,
+    }
+  );
+  assert.equal(timeout.ok, false);
+  if (timeout.ok) return;
+  assert.equal(timeout.attempts[0].reason, 'timeout');
+  assert.equal(timeout.attempts[1].reason, 'not_configured');
+});
+
 test('category rename/delete and same-workspace reassignment preserve all evidence and the success baseline', async () => {
   const categoryId = await category();
   const id = await independent({ categoryId });
@@ -832,6 +946,10 @@ test('workspace API rejects cross-tenant sites, categories, monitors and token a
     workspaces.map(item => item.id),
     ['workspace']
   );
+  assert.equal(
+    (await request(`${workspaceRoot}/research/draft`, 'POST', draftInput)).status,
+    503
+  );
   for (const filters of [
     'siteId=outside-site',
     'categoryId=outside-category',
@@ -874,6 +992,7 @@ test('workspace API rejects cross-tenant sites, categories, monitors and token a
       [`${workspaceRoot}/${id}`, 'PATCH', { categoryId: null }],
       [`${workspaceRoot}/${id}/check`, 'POST', undefined],
       [`${workspaceRoot}/${id}`, 'DELETE', undefined],
+      [`${workspaceRoot}/research/draft`, 'POST', draftInput],
       [`${workspaceRoot}/categories`, 'POST', { name: 'Wrong' }],
       [`${workspaceRoot}/categories/${categoryId}`, 'PATCH', { name: 'Wrong' }],
       [`${workspaceRoot}/categories/${categoryId}`, 'DELETE', undefined],
@@ -937,16 +1056,139 @@ test('research library keeps manual evidence workspace-scoped and only links an 
   assert.deepEqual(report.profiles[0].paymentProviders, [
     { provider: 'Stripe', status: 'evidence_only', evidence: 'Manual pricing-page review' },
   ]);
-  assert.deepEqual(report.profiles[0].categories.map((item: { id: string }) => item.id), [categoryId]);
-  assert.deepEqual(report.profiles[0].sites.map((item: { id: string }) => item.id), ['site']);
-  assert.deepEqual(report.profiles[0].monitors.map((item: { id: string }) => item.id), [monitorId]);
-  assert.equal(
-    (await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {})).status,
-    400
+  assert.deepEqual(
+    report.profiles[0].categories.map((item: { id: string }) => item.id),
+    [categoryId]
   );
+  assert.deepEqual(
+    report.profiles[0].sites.map((item: { id: string }) => item.id),
+    ['site']
+  );
+  assert.deepEqual(
+    report.profiles[0].monitors.map((item: { id: string }) => item.id),
+    [monitorId]
+  );
+  assert.equal((await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {})).status, 400);
   assert.equal(
     (await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Updated' })).status,
     200
+  );
+});
+
+test('pre-research archives a Keyword Harvester job and its action path without creating a monitor', async () => {
+  const root = `${workspaceRoot}/research/pre-research`;
+  const before = await database
+    .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+    .bind('workspace')
+    .first<{ count: number }>();
+  const sourceJobUrl =
+    'chrome-extension://dpconkblakejdpcjkbapgpaajbcfbhlk/harvest.html?job=b76dd376-1f5d-4442-8999-e1897101d0d5';
+  const created = await request(root, 'POST', {
+    sourceJobUrl,
+    sourceVersion: '0.7.15',
+    title: 'image to prompt recursive harvest',
+    currentQuery: 'image to prompt',
+    harvestStatus: 'completed',
+    seedKeywords: ['image to prompt', 'AI image prompt'],
+    summary: 'All queued queries completed through the configured page boundary.',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+  });
+  assert.equal(created.status, 201);
+  const runId = (await created.json()).data.id as string;
+  assert.equal(
+    (
+      await request(`${root}/${runId}/actions`, 'POST', {
+        kind: 'analysis',
+        outcome: 'completed',
+        title: 'Classified candidate domains',
+        detail: 'No monitor was created during pre-research.',
+        references: ['codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7'],
+      })
+    ).status,
+    201
+  );
+  assert.equal(
+    (await request(`${root}/${runId}/stage`, 'PATCH', { stage: 'reviewing' })).status,
+    200
+  );
+  assert.deepEqual(
+    await database
+      .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+      .bind('workspace')
+      .first<{ count: number }>(),
+    before
+  );
+  const list = (await (await request(`${root}?stage=reviewing`)).json()).data;
+  assert.equal(list.source, 'keyword_harvester_import');
+  assert.equal(list.runs.length, 1);
+  assert.equal(list.runs[0].sourceJobId, 'b76dd376-1f5d-4442-8999-e1897101d0d5');
+  assert.equal(list.runs[0].actionCount, 1);
+  const detail = (await (await request(`${root}/${runId}`)).json()).data;
+  assert.equal(detail.actions.length, 1);
+  assert.equal(detail.actions[0].title, 'Classified candidate domains');
+  const mcp = await (
+    await request(
+      '/api/mcp',
+      'POST',
+      {
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: {
+          name: 'get_competitor_pre_research',
+          arguments: { workspaceId: 'workspace', runId },
+        },
+      },
+      'reader'
+    )
+  ).json();
+  assert.equal(mcp.result.isError, false);
+  assert.equal(JSON.parse(mcp.result.content[0].text).data.actions.length, 1);
+  assert.equal(
+    (await request(root, 'POST', { sourceJobUrl: 'https://fixture.example.com/' })).status,
+    400
+  );
+  assert.equal(
+    (
+      await request(root, 'POST', {
+        sourceJobUrl,
+        sourceVersion: '0.7.15',
+        title: 'Duplicate job',
+        seedKeywords: [],
+      })
+    ).status,
+    409
+  );
+  assert.equal(
+    (await request(`${root}/missing/actions`, 'POST', { title: 'Missing' })).status,
+    404
+  );
+  assert.equal(
+    (
+      await request(
+        root,
+        'POST',
+        { sourceJobUrl, sourceVersion: '0.7.15', title: 'Blocked', seedKeywords: [] },
+        'member'
+      )
+    ).status,
+    403
+  );
+  assert.equal(
+    (
+      await request(root, 'POST', {
+        sourceJobUrl:
+          'chrome-extension://dpconkblakejdpcjkbapgpaajbcfbhlk/harvest.html?job=c7a4b371-1f5d-4442-8999-e1897101d0d5',
+        sourceVersion: '0.7.15',
+        title: 'Bounded import payload',
+        seedKeywords: Array.from(
+          { length: 50 },
+          (_, index) => `keyword-${index}-${'x'.repeat(70)}`
+        ),
+        summary: 's'.repeat(1000),
+      })
+    ).status,
+    201
   );
 });
 
@@ -972,25 +1214,31 @@ test('research profiles reject foreign links, write attempts from non-owners and
     );
   assert.equal((await request(`${workspaceRoot}/research?monitorId=outside-monitor`)).status, 404);
   assert.equal(
-    (await request(`${workspaceRoot}/research`, 'POST', {
-      brandName: 'Duplicate',
-      homepageUrl: 'https://fixture.example.com/research',
-      seedKeywords: [],
-      paymentProviders: [],
-      sources: [],
-    })).status,
+    (
+      await request(`${workspaceRoot}/research`, 'POST', {
+        brandName: 'Duplicate',
+        homepageUrl: 'https://fixture.example.com/research',
+        seedKeywords: [],
+        paymentProviders: [],
+        sources: [],
+      })
+    ).status,
     409
   );
   for (const token of ['member', 'reader']) {
     assert.equal((await request(`${workspaceRoot}/research`, 'GET', undefined, token)).status, 200);
     for (const [path, method, body] of [
-      [`${workspaceRoot}/research`, 'POST', {
-        brandName: 'Blocked',
-        homepageUrl: 'https://fixture.example.com/blocked',
-        seedKeywords: [],
-        paymentProviders: [],
-        sources: [],
-      }],
+      [
+        `${workspaceRoot}/research`,
+        'POST',
+        {
+          brandName: 'Blocked',
+          homepageUrl: 'https://fixture.example.com/blocked',
+          seedKeywords: [],
+          paymentProviders: [],
+          sources: [],
+        },
+      ],
       [`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Blocked' }],
       [`${workspaceRoot}/research/${profileId}/categories`, 'PUT', { ids: [] }],
     ] as const)
@@ -1020,14 +1268,21 @@ test('research profile limit and cascade cleanup protect bounded D1 metadata sto
         )
     )
   );
-  assert.equal((await request(`${workspaceRoot}/research`, 'POST', {
-    brandName: 'One too many',
-    homepageUrl: 'https://fixture.example.com/research-overflow',
-    seedKeywords: [],
-    paymentProviders: [],
-    sources: [],
-  })).status, 409);
-  await database.prepare("DELETE FROM competitor_research_profiles WHERE workspace_id = 'workspace'").run();
+  assert.equal(
+    (
+      await request(`${workspaceRoot}/research`, 'POST', {
+        brandName: 'One too many',
+        homepageUrl: 'https://fixture.example.com/research-overflow',
+        seedKeywords: [],
+        paymentProviders: [],
+        sources: [],
+      })
+    ).status,
+    409
+  );
+  await database
+    .prepare("DELETE FROM competitor_research_profiles WHERE workspace_id = 'workspace'")
+    .run();
   await database.batch([
     database.prepare(
       "INSERT INTO workspaces (id,name,slug) VALUES ('research-storage','Research storage','research-storage')"
@@ -1038,8 +1293,13 @@ test('research profile limit and cascade cleanup protect bounded D1 metadata sto
   ]);
   await database.prepare("DELETE FROM workspaces WHERE id = 'research-storage'").run();
   assert.equal(
-    (await database.prepare("SELECT count(*) AS count FROM competitor_research_profiles WHERE id = 'research-cascade'").first<{ count: number }>())
-      ?.count,
+    (
+      await database
+        .prepare(
+          "SELECT count(*) AS count FROM competitor_research_profiles WHERE id = 'research-cascade'"
+        )
+        .first<{ count: number }>()
+    )?.count,
     0
   );
 });
@@ -1222,9 +1482,10 @@ test('workspace MCP discovers scoped categories, filters evidence and rejects ma
     workspaceId: 'workspace',
     lifecycleStatus: 'watch',
   });
-  assert.deepEqual(JSON.parse(research.content[0].text).data.profiles.map((item: { id: string }) => item.id), [
-    profileId,
-  ]);
+  assert.deepEqual(
+    JSON.parse(research.content[0].text).data.profiles.map((item: { id: string }) => item.id),
+    [profileId]
+  );
   for (const args of [
     {},
     null,

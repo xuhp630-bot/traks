@@ -6,6 +6,11 @@ import type {
   CompetitorCheck,
   CompetitorCategory,
   CompetitorFilters,
+  CompetitorPreResearchDetail,
+  CompetitorPreResearchFilters,
+  CompetitorPreResearchReport,
+  CompetitorResearchDraft,
+  CompetitorResearchDraftInput,
   CompetitorResearchFilters,
   CompetitorResearchReport,
 } from '@traks/shared';
@@ -130,6 +135,40 @@ export const api = {
     if (filters.monitorId) query.set('monitorId', filters.monitorId);
     const response = await fetch(
       `${competitorRoot({ workspaceId })}/research${query.size ? `?${query}` : ''}`
+    );
+    await assertOk(response);
+    return response.json();
+  },
+  async generateCompetitorResearchDraft(
+    workspaceId: string,
+    input: CompetitorResearchDraftInput
+  ): Promise<{ data: CompetitorResearchDraft }> {
+    const response = await fetch(`${competitorRoot({ workspaceId })}/research/draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    await assertOk(response);
+    return response.json();
+  },
+  async getCompetitorPreResearch(
+    workspaceId: string,
+    filters: CompetitorPreResearchFilters = {}
+  ): Promise<{ data: CompetitorPreResearchReport }> {
+    const query = new URLSearchParams();
+    if (filters.stage) query.set('stage', filters.stage);
+    const response = await fetch(
+      `${competitorRoot({ workspaceId })}/research/pre-research${query.size ? `?${query}` : ''}`
+    );
+    await assertOk(response);
+    return response.json();
+  },
+  async getCompetitorPreResearchDetail(
+    workspaceId: string,
+    runId: string
+  ): Promise<{ data: CompetitorPreResearchDetail }> {
+    const response = await fetch(
+      `${competitorRoot({ workspaceId })}/research/pre-research/${encodeURIComponent(runId)}`
     );
     await assertOk(response);
     return response.json();

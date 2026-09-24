@@ -1,13 +1,17 @@
 import { z } from 'zod';
 
 export const competitorCadence = z.enum(['manual', 'daily', 'weekly']);
-export const competitorResearchStatus = z.enum([
-  'inbox',
-  'focus',
-  'watch',
-  'parked',
-  'discarded',
+export const competitorResearchStatus = z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']);
+export const competitorPreResearchStage = z.enum(['imported', 'reviewing', 'verified', 'archived']);
+export const competitorPreResearchActionKind = z.enum([
+  'harvest',
+  'review',
+  'analysis',
+  'classification',
+  'handoff',
+  'note',
 ]);
+export const competitorPreResearchOutcome = z.enum(['completed', 'partial', 'failed', 'skipped']);
 const competitorId = z
   .string()
   .min(1)
@@ -51,6 +55,39 @@ export const competitorFilters = z
 export type CompetitorFilters = z.infer<typeof competitorFilters>;
 
 const researchKeyword = z.string().trim().min(1).max(100);
+const keywordHarvesterJobUrl = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .refine(value => {
+    try {
+      const url = new URL(value);
+      return (
+        url.protocol === 'chrome-extension:' &&
+        url.hostname === 'dpconkblakejdpcjkbapgpaajbcfbhlk' &&
+        url.pathname === '/harvest.html' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          url.searchParams.get('job') ?? ''
+        )
+      );
+    } catch {
+      return false;
+    }
+  }, 'Expected a Keyword Harvester harvest.html URL with a job id');
+const sourceReferenceUrl = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .refine(value => {
+    try {
+      const url = new URL(value);
+      return ['https:', 'http:', 'codex:', 'chrome-extension:'].includes(url.protocol);
+    } catch {
+      return false;
+    }
+  }, 'Expected an http(s), codex, or chrome-extension URL');
 export const competitorResearchPayment = z
   .object({
     provider: z.string().trim().min(1).max(80),
@@ -81,14 +118,24 @@ const competitorResearchFields = z
   })
   .strict();
 export const competitorResearchInput = competitorResearchFields
-  .refine(value => distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())), {
-    message: 'Seed keywords must be unique',
-    path: ['seedKeywords'],
-  })
-  .refine(value => distinctIds(value.paymentProviders.map(item => item.provider.normalize('NFKC').toLowerCase())), {
-    message: 'Payment providers must be unique',
-    path: ['paymentProviders'],
-  });
+  .refine(
+    value =>
+      distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())),
+    {
+      message: 'Seed keywords must be unique',
+      path: ['seedKeywords'],
+    }
+  )
+  .refine(
+    value =>
+      distinctIds(
+        value.paymentProviders.map(item => item.provider.normalize('NFKC').toLowerCase())
+      ),
+    {
+      message: 'Payment providers must be unique',
+      path: ['paymentProviders'],
+    }
+  );
 export const competitorResearchUpdate = competitorResearchFields
   .partial()
   .strict()
@@ -102,7 +149,9 @@ export const competitorResearchUpdate = competitorResearchFields
   .refine(
     value =>
       !value.paymentProviders ||
-      distinctIds(value.paymentProviders.map(item => item.provider.normalize('NFKC').toLowerCase())),
+      distinctIds(
+        value.paymentProviders.map(item => item.provider.normalize('NFKC').toLowerCase())
+      ),
     { message: 'Payment providers must be unique', path: ['paymentProviders'] }
   );
 export const competitorResearchFilters = z
@@ -113,11 +162,75 @@ export const competitorResearchFilters = z
     monitorId: competitorId.optional(),
   })
   .strict();
+export const competitorResearchDraftInput = z
+  .object({
+    homepageUrl: z.string().trim().url().max(500),
+    brandName: z.string().trim().min(1).max(100).nullable().default(null),
+    pageTitle: z.string().trim().min(1).max(200).nullable().default(null),
+    productSummary: z.string().trim().min(1).max(4000).nullable().default(null),
+    seedKeywords: z.array(researchKeyword).max(50).default([]),
+  })
+  .strict()
+  .refine(
+    value =>
+      distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())),
+    {
+      message: 'Seed keywords must be unique',
+      path: ['seedKeywords'],
+    }
+  );
 export const competitorResearchLinksInput = z
   .object({ ids: z.array(competitorId).max(100).refine(distinctIds, 'Link ids must be unique') })
   .strict();
+export const competitorPreResearchRunInput = z
+  .object({
+    sourceJobUrl: keywordHarvesterJobUrl,
+    sourceVersion: z.string().trim().min(1).max(40),
+    title: z.string().trim().min(1).max(160),
+    currentQuery: z.string().trim().min(1).max(200).nullable().default(null),
+    harvestStatus: z
+      .enum(['active', 'completed', 'paused', 'partial', 'unknown'])
+      .default('unknown'),
+    seedKeywords: z.array(researchKeyword).max(50).default([]),
+    summary: z.string().trim().max(1000).nullable().default(null),
+    sourceThreadUrl: sourceReferenceUrl.nullable().default(null),
+  })
+  .strict()
+  .refine(
+    value =>
+      distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())),
+    {
+      message: 'Seed keywords must be unique',
+      path: ['seedKeywords'],
+    }
+  );
+export const competitorPreResearchActionInput = z
+  .object({
+    kind: competitorPreResearchActionKind.default('note'),
+    outcome: competitorPreResearchOutcome.default('completed'),
+    title: z.string().trim().min(1).max(160),
+    detail: z.string().trim().max(1000).nullable().default(null),
+    references: z
+      .array(sourceReferenceUrl)
+      .max(4)
+      .refine(distinctIds, 'References must be unique')
+      .default([]),
+    occurredAt: z.number().int().min(0).max(4_102_444_800_000).optional(),
+  })
+  .strict();
+export const competitorPreResearchStageInput = z
+  .object({ stage: competitorPreResearchStage })
+  .strict();
+export const competitorPreResearchFilters = z
+  .object({ stage: competitorPreResearchStage.optional() })
+  .strict();
 export type CompetitorResearchFilters = z.infer<typeof competitorResearchFilters>;
+export type CompetitorResearchDraftInput = z.infer<typeof competitorResearchDraftInput>;
 export type CompetitorResearchStatus = z.infer<typeof competitorResearchStatus>;
+export type CompetitorPreResearchStage = z.infer<typeof competitorPreResearchStage>;
+export type CompetitorPreResearchActionKind = z.infer<typeof competitorPreResearchActionKind>;
+export type CompetitorPreResearchOutcome = z.infer<typeof competitorPreResearchOutcome>;
+export type CompetitorPreResearchFilters = z.infer<typeof competitorPreResearchFilters>;
 export interface CompetitorCategory {
   id: string;
   name: string;
@@ -133,6 +246,8 @@ export const COMPETITOR_LIMITS = {
   researchCategoryLinks: 30,
   researchSiteLinks: 100,
   researchMonitorLinks: 100,
+  preResearchRuns: 500,
+  preResearchActions: 200,
 } as const;
 
 export interface CompetitorSnapshot {
@@ -207,16 +322,94 @@ export interface CompetitorResearchProfile {
   monitors: Pick<CompetitorMonitor, 'id' | 'name' | 'url'>[];
 }
 
+export interface CompetitorResearchDraft {
+  source: 'ai_research_draft';
+  provider: 'glm' | 'terra';
+  model: string;
+  generatedAt: number;
+  draft: {
+    brandName: string;
+    pageTitle: string | null;
+    productSummary: string | null;
+    seedKeywords: string[];
+    paymentProviders: CompetitorResearchPayment[];
+    evidenceGaps: string[];
+  };
+  attempts: {
+    provider: 'glm' | 'terra';
+    model: string;
+    outcome: 'succeeded' | 'failed' | 'skipped';
+    reason?:
+      | 'not_configured'
+      | 'invalid_configuration'
+      | 'timeout'
+      | 'upstream_rejected'
+      | 'unavailable'
+      | 'invalid_response';
+  }[];
+  limitations: string[];
+}
+
 export interface CompetitorResearchReport {
   source: 'manual_research_library';
   generatedAt: number;
   canManage: boolean;
-  scope: { workspaceId: string; lifecycleStatus?: CompetitorResearchStatus; categoryId?: string; siteId?: string; monitorId?: string };
+  scope: {
+    workspaceId: string;
+    lifecycleStatus?: CompetitorResearchStatus;
+    categoryId?: string;
+    siteId?: string;
+    monitorId?: string;
+  };
   limits: Pick<
     typeof COMPETITOR_LIMITS,
     'researchProfiles' | 'researchCategoryLinks' | 'researchSiteLinks' | 'researchMonitorLinks'
   >;
   profiles: CompetitorResearchProfile[];
+  limitations: string[];
+}
+
+export interface CompetitorPreResearchAction {
+  id: string;
+  kind: CompetitorPreResearchActionKind;
+  outcome: CompetitorPreResearchOutcome;
+  title: string;
+  detail: string | null;
+  references: string[];
+  occurredAt: number;
+}
+
+export interface CompetitorPreResearchRun {
+  id: string;
+  workspaceId: string;
+  source: 'keyword_harvester';
+  sourceJobId: string;
+  sourceJobUrl: string;
+  sourceVersion: string;
+  title: string;
+  currentQuery: string | null;
+  harvestStatus: 'active' | 'completed' | 'paused' | 'partial' | 'unknown';
+  stage: CompetitorPreResearchStage;
+  seedKeywords: string[];
+  summary: string | null;
+  sourceThreadUrl: string | null;
+  actionCount: number;
+  latestActionAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CompetitorPreResearchDetail extends CompetitorPreResearchRun {
+  actions: CompetitorPreResearchAction[];
+}
+
+export interface CompetitorPreResearchReport {
+  source: 'keyword_harvester_import';
+  generatedAt: number;
+  canManage: boolean;
+  scope: { workspaceId: string; stage?: CompetitorPreResearchStage };
+  limits: Pick<typeof COMPETITOR_LIMITS, 'preResearchRuns' | 'preResearchActions'>;
+  runs: CompetitorPreResearchRun[];
   limitations: string[];
 }
 

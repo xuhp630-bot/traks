@@ -8,9 +8,14 @@ import {
   competitorFilters,
   competitorUpdate,
   competitorResearchFilters,
+  competitorResearchDraftInput,
   competitorResearchInput,
   competitorResearchLinksInput,
   competitorResearchUpdate,
+  competitorPreResearchActionInput,
+  competitorPreResearchFilters,
+  competitorPreResearchRunInput,
+  competitorPreResearchStageInput,
   COMPETITOR_LIMITS,
 } from '@traks/shared';
 import type { z } from 'zod';
@@ -36,6 +41,13 @@ import {
   replaceResearchSiteLinks,
   researchProfileExists,
 } from '../lib/competitor-research';
+import {
+  competitorPreResearchDetail,
+  competitorPreResearchReport,
+  keywordHarvesterJobId,
+  preResearchRunExists,
+} from '../lib/competitor-pre-research';
+import { generateCompetitorResearchDraft } from '../lib/competitor-research-draft';
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Variables }>;
 type Access = {
@@ -222,8 +234,144 @@ async function validateResearchLinks(
   return null;
 }
 
+function preResearchRoutes() {
+  return new Hono<{ Bindings: Bindings; Variables: Variables }>()
+    .get('/', validate('query', competitorPreResearchFilters), async c => {
+      const scope = await access(c);
+      if (scope instanceof Response) return scope;
+      return c.json({
+        data: await competitorPreResearchReport(
+          c.env.DB,
+          scope.workspaceId!,
+          c.req.valid('query'),
+          scope.canManage
+        ),
+      });
+    })
+    .get('/:runId', async c => {
+      const scope = await access(c);
+      if (scope instanceof Response) return scope;
+      const data = await competitorPreResearchDetail(
+        c.env.DB,
+        scope.workspaceId!,
+        c.req.param('runId')
+      );
+      if (!data) return c.json({ error: 'Pre-research run not found' }, 404);
+      return c.json({ data });
+    })
+    .post('/', validate('json', competitorPreResearchRunInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const body = c.req.valid('json');
+      const now = Date.now();
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_pre_research_runs (id,workspace_id,source,source_job_id,source_job_url,source_version,title,current_query,harvest_status,stage,seed_keywords,summary,source_thread_url,created_at,updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM competitor_pre_research_runs WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+      )
+        .bind(
+          id,
+          scope.workspaceId,
+          'keyword_harvester',
+          keywordHarvesterJobId(body.sourceJobUrl),
+          body.sourceJobUrl,
+          body.sourceVersion,
+          body.title,
+          body.currentQuery,
+          body.harvestStatus,
+          'imported',
+          JSON.stringify(body.seedKeywords),
+          body.summary,
+          body.sourceThreadUrl,
+          now,
+          now,
+          scope.workspaceId,
+          COMPETITOR_LIMITS.preResearchRuns
+        )
+        .first();
+      if (!created)
+        return c.json(
+          { error: 'This harvest job already exists or the 500-run workspace limit was reached' },
+          409
+        );
+      return c.json({ data: { id } }, 201);
+    })
+    .patch('/:runId/stage', validate('json', competitorPreResearchStageInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const updated = await c.env.DB.prepare(
+        'UPDATE competitor_pre_research_runs SET stage = ?, updated_at = ? WHERE id = ? AND workspace_id = ? RETURNING id'
+      )
+        .bind(c.req.valid('json').stage, Date.now(), c.req.param('runId'), scope.workspaceId)
+        .first();
+      if (!updated) return c.json({ error: 'Pre-research run not found' }, 404);
+      return c.json({ data: updated });
+    })
+    .post('/:runId/actions', validate('json', competitorPreResearchActionInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const runId = c.req.param('runId');
+      if (!(await preResearchRunExists(c.env.DB, scope.workspaceId!, runId)))
+        return c.json({ error: 'Pre-research run not found' }, 404);
+      const body = c.req.valid('json');
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_pre_research_actions (id,run_id,kind,outcome,title,detail,"references",occurred_at) SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_pre_research_actions WHERE run_id = ?) < ? RETURNING id'
+      )
+        .bind(
+          id,
+          runId,
+          body.kind,
+          body.outcome,
+          body.title,
+          body.detail,
+          JSON.stringify(body.references),
+          body.occurredAt ?? Date.now(),
+          runId,
+          COMPETITOR_LIMITS.preResearchActions
+        )
+        .first();
+      if (!created)
+        return c.json({ error: 'The 200-action limit for this pre-research run was reached' }, 409);
+      await c.env.DB.prepare(
+        'UPDATE competitor_pre_research_runs SET updated_at = ? WHERE id = ? AND workspace_id = ?'
+      )
+        .bind(Date.now(), runId, scope.workspaceId)
+        .run();
+      return c.json({ data: { id } }, 201);
+    });
+}
+
 function researchRoutes() {
   return new Hono<{ Bindings: Bindings; Variables: Variables }>()
+    .route('/pre-research', preResearchRoutes())
+    .post('/draft', validate('json', competitorResearchDraftInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const body = c.req.valid('json');
+      let url: URL;
+      try {
+        url = publicPageUrl(body.homepageUrl);
+      } catch (error) {
+        return c.json(
+          { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+          400
+        );
+      }
+      const result = await generateCompetitorResearchDraft(c.env, {
+        ...body,
+        homepageUrl: url.href,
+      });
+      if (!result.ok)
+        return c.json(
+          {
+            error:
+              'AI draft generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.',
+            attempts: result.attempts,
+          },
+          503
+        );
+      return c.json({ data: result.data });
+    })
     .get('/', validate('query', competitorResearchFilters), async c => {
       const scope = await access(c);
       if (scope instanceof Response) return scope;
@@ -231,7 +379,12 @@ function researchRoutes() {
       const invalid = await validateResearchFilters(c, scope.workspaceId!, filters);
       if (invalid) return invalid;
       return c.json({
-        data: await competitorResearchReport(c.env.DB, scope.workspaceId!, filters, scope.canManage),
+        data: await competitorResearchReport(
+          c.env.DB,
+          scope.workspaceId!,
+          filters,
+          scope.canManage
+        ),
       });
     })
     .post('/', validate('json', competitorResearchInput), async c => {
@@ -273,7 +426,10 @@ function researchRoutes() {
         )
         .first();
       if (!created)
-        return c.json({ error: 'Duplicate homepage URL or 500-profile workspace limit reached' }, 409);
+        return c.json(
+          { error: 'Duplicate homepage URL or 500-profile workspace limit reached' },
+          409
+        );
       return c.json({ data: { id } }, 201);
     })
     .patch('/:profileId', validate('json', competitorResearchUpdate), async c => {
@@ -330,7 +486,8 @@ function researchRoutes() {
       )
         .bind(...values, Date.now(), id, scope.workspaceId)
         .first();
-      if (!result) return c.json({ error: 'Research profile changed or duplicate homepage URL' }, 409);
+      if (!result)
+        return c.json({ error: 'Research profile changed or duplicate homepage URL' }, 409);
       return c.json({ data: result });
     })
     .put('/:profileId/categories', validate('json', competitorResearchLinksInput), async c => {
@@ -587,10 +744,13 @@ app.onError((error, c) => {
   return c.json({ error: 'Unable to read or update competitor data' }, 500);
 });
 app.use('*', requireAuth);
-app.use(
-  '*',
-  bodyLimit({ maxSize: 2048, onError: c => c.json({ error: 'Request too large' }, 413) })
-);
+app.use('*', async (c, next) => {
+  const maxSize =
+    c.req.path.includes('/research/pre-research') || c.req.path.includes('/research/draft')
+      ? 12 * 1024
+      : 2048;
+  await bodyLimit({ maxSize, onError: c => c.json({ error: 'Request too large' }, 413) })(c, next);
+});
 app.use('*', async (c, next) => {
   c.header('Cache-Control', 'private, no-store');
   if (

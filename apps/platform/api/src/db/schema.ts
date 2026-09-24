@@ -1,4 +1,12 @@
-import { sqliteTable, text, integer, uniqueIndex, index, check, primaryKey } from 'drizzle-orm/sqlite-core';
+import {
+  sqliteTable,
+  text,
+  integer,
+  uniqueIndex,
+  index,
+  check,
+  primaryKey,
+} from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import type { FunnelStep, SegmentFilters } from '@traks/shared';
@@ -393,6 +401,57 @@ export const competitorResearchSiteLinks = sqliteTable(
     primaryKey({ columns: [table.profileId, table.siteId] }),
     index('competitor_research_site_profile_idx').on(table.siteId, table.profileId),
   ]
+);
+
+export const competitorPreResearchRuns = sqliteTable(
+  'competitor_pre_research_runs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    source: text('source').notNull().default('keyword_harvester'),
+    sourceJobId: text('source_job_id').notNull(),
+    sourceJobUrl: text('source_job_url').notNull(),
+    sourceVersion: text('source_version').notNull(),
+    title: text('title').notNull(),
+    currentQuery: text('current_query'),
+    harvestStatus: text('harvest_status').notNull().default('unknown'),
+    stage: text('stage').notNull().default('imported'),
+    seedKeywords: text('seed_keywords').notNull().default('[]'),
+    summary: text('summary'),
+    sourceThreadUrl: text('source_thread_url'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  table => [
+    uniqueIndex('competitor_pre_research_workspace_job_idx').on(
+      table.workspaceId,
+      table.sourceJobId
+    ),
+    index('competitor_pre_research_workspace_stage_idx').on(
+      table.workspaceId,
+      table.stage,
+      table.updatedAt
+    ),
+  ]
+);
+
+export const competitorPreResearchActions = sqliteTable(
+  'competitor_pre_research_actions',
+  {
+    id: text('id').primaryKey(),
+    runId: text('run_id')
+      .notNull()
+      .references(() => competitorPreResearchRuns.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    outcome: text('outcome').notNull(),
+    title: text('title').notNull(),
+    detail: text('detail'),
+    references: text('references').notNull().default('[]'),
+    occurredAt: integer('occurred_at').notNull(),
+  },
+  table => [index('competitor_pre_research_action_run_time_idx').on(table.runId, table.occurredAt)]
 );
 
 export const competitorMonitors = sqliteTable(

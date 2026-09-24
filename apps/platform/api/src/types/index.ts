@@ -1,6 +1,12 @@
 export type Bindings = {
   COMPETITOR_ALLOWED_HOSTS?: string;
   COMPETITOR_SCHEDULE_ENABLED?: string;
+  COMPETITOR_RESEARCH_GLM_API_KEY?: string;
+  COMPETITOR_RESEARCH_GLM_API_URL?: string;
+  COMPETITOR_RESEARCH_GLM_MODEL?: string;
+  COMPETITOR_RESEARCH_TERRA_API_KEY?: string;
+  COMPETITOR_RESEARCH_TERRA_API_URL?: string;
+  COMPETITOR_RESEARCH_TERRA_MODEL?: string;
   CRM_QUALITY_INTEGRATIONS?: string;
   DB: D1Database;
   /** Static assets (web SPA); absent in local dev where vite serves the SPA. */

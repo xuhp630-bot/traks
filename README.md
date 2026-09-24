@@ -160,6 +160,14 @@ Iceberg sink (60 s roll interval for ~1-minute dashboard freshness), and
 pipeline. Paste the printed stream ID into
 `apps/platform/collect/wrangler.toml`.
 
+### Optional AI research drafts
+
+The Competitor Research form can create an unsaved, evidence-aware draft from fields the operator enters. GLM-5.3 is the primary provider, using Z.AI's documented `https://api.z.ai/api/paas/v4/chat/completions` endpoint and model ID `glm-5.3` unless overridden. Configure `COMPETITOR_RESEARCH_GLM_API_KEY` as a secret on the API Worker; optional `COMPETITOR_RESEARCH_GLM_API_URL` and `COMPETITOR_RESEARCH_GLM_MODEL` support an approved GLM-compatible endpoint or model override.
+
+Terra is attempted only after GLM fails. It requires an authorized OpenAI-compatible Chat Completions bridge and all of `COMPETITOR_RESEARCH_TERRA_API_URL`, `COMPETITOR_RESEARCH_TERRA_API_KEY`, and `COMPETITOR_RESEARCH_TERRA_MODEL`. A ChatGPT/Codex subscription by itself is not a Worker API credential and is never read or forwarded by Traks. Set secrets in the target Worker runtime rather than committing them to `wrangler.toml`, source control, browser code, or logs.
+
+The generated result is only a draft: it does not crawl a target, access a browser extension, inspect a Codex task, save a profile, create a monitor, or mark a payment provider as confirmed. Review the evidence gaps and manually save the final research record.
+
 **2. Migrate D1 and start the dev servers:**
 
 ```sh

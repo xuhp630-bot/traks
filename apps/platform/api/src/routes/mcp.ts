@@ -119,6 +119,14 @@ const competitorResearchArgs = z
     monitorId: competitorId.optional(),
   })
   .strict();
+const competitorPreResearchArgs = z
+  .object({
+    workspaceId: competitorId,
+    runId: competitorId.optional(),
+    stage: z.enum(['imported', 'reviewing', 'verified', 'archived']).optional(),
+  })
+  .strict()
+  .refine(args => !args.runId || !args.stage, 'runId and stage cannot be combined');
 
 function competitorReadPath(args: Record<string, unknown>, history = false): string {
   const root = args.workspaceId
@@ -137,6 +145,14 @@ function competitorResearchReadPath(args: Record<string, unknown>): string {
     if (args[key]) query.set(key, String(args[key]));
   }
   const root = `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research`;
+  return `${root}${query.size ? `?${query}` : ''}`;
+}
+
+function competitorPreResearchReadPath(args: Record<string, unknown>): string {
+  const query = new URLSearchParams();
+  if (args.stage) query.set('stage', String(args.stage));
+  const root = `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research/pre-research`;
+  if (args.runId) return `${root}/${encodeURIComponent(String(args.runId))}`;
   return `${root}${query.size ? `?${query}` : ''}`;
 }
 
@@ -180,13 +196,38 @@ const TOOLS: ToolDef[] = [
         },
         categoryId: str('Optional category id from get_competitor_categories'),
         siteId: str('Optional explicitly linked owned site id from list_sites'),
-        monitorId: str('Optional explicitly linked existing monitor id from get_competitor_monitors'),
+        monitorId: str(
+          'Optional explicitly linked existing monitor id from get_competitor_monitors'
+        ),
       },
       required: ['workspaceId'],
       additionalProperties: false,
     },
     validateArgs: args => competitorResearchArgs.safeParse(args).success,
     request: args => ({ method: 'GET', path: competitorResearchReadPath(args) }),
+  },
+  {
+    name: 'get_competitor_pre_research',
+    description:
+      'Read manually imported Keyword Harvester pre-research runs and their bounded action paths. Pass runId to read a single run with every saved action. Each run may reference its local extension job and a Codex task for provenance. This does not read browser extension storage, crawl a target, write to Codex, create a monitor, or start a schedule.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: str('Workspace id from list_competitor_workspaces'),
+        runId: str(
+          'Optional pre-research run id; returns its saved action path and cannot be combined with stage'
+        ),
+        stage: {
+          type: 'string',
+          enum: ['imported', 'reviewing', 'verified', 'archived'],
+          description: 'Optional pre-research workflow stage',
+        },
+      },
+      required: ['workspaceId'],
+      additionalProperties: false,
+    },
+    validateArgs: args => competitorPreResearchArgs.safeParse(args).success,
+    request: args => ({ method: 'GET', path: competitorPreResearchReadPath(args) }),
   },
   {
     name: 'get_competitor_monitors',
@@ -588,6 +629,7 @@ export function mcpHandler(dispatch: Dispatch) {
                 'get_competitor_monitors',
                 'get_competitor_history',
                 'get_competitor_categories',
+                'get_competitor_pre_research',
                 'get_competitor_research',
                 'list_competitor_workspaces',
               ].includes(t.name)

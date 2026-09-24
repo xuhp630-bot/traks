@@ -232,6 +232,13 @@
       "when": 1790178267573,
       "tag": "0032_competitor_research_library",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1790183951673,
+      "tag": "0033_competitor_pre_research_metadata",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import {
   ExternalLink,
   RefreshCw,
   Plus,
+  Sparkles,
   Trash2,
   ShieldCheck,
   AlertTriangle,
@@ -16,7 +17,12 @@ import type {
   CompetitorSnapshot,
   CompetitorCategory,
   CompetitorMonitor,
+  CompetitorPreResearchAction,
+  CompetitorPreResearchDetail,
+  CompetitorPreResearchRun,
+  CompetitorPreResearchStage,
   CompetitorResearchProfile,
+  CompetitorResearchDraft,
   CompetitorResearchStatus,
 } from '@traks/shared';
 import { api } from '@/lib/api';
@@ -54,6 +60,12 @@ const researchStatusLabels: Record<CompetitorResearchStatus, string> = {
   parked: '暂缓',
   discarded: '放弃',
 };
+const preResearchStageLabels: Record<CompetitorPreResearchStage, string> = {
+  imported: '已导入',
+  reviewing: '分析中',
+  verified: '已核验',
+  archived: '已归档',
+};
 const errors: Record<string, string> = {
   host_not_approved: '主机尚未获管理员批准',
   robots_denied: 'robots.txt 不允许抓取',
@@ -80,6 +92,7 @@ function ErrorNotice({ error }: { error: unknown }): ReactElement {
 
 function CompetitorsPage(): ReactElement {
   const { current, isLoading } = useWorkspace();
+  const [view, setView] = useState<'research' | 'monitoring'>('research');
   const sites = useQuery({
     queryKey: ['sites', current?.id],
     queryFn: () => api.getSites(current!.id),
@@ -93,14 +106,42 @@ function CompetitorsPage(): ReactElement {
           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-[#6F6D7A]">
             <Radar size={16} /> Competitive intelligence
           </p>
-          <h1 className="text-3xl font-semibold tracking-tight text-[#3D3B4F]">竞品分析与监控</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-[#3D3B4F]">
+            {view === 'research' ? '竞品分析' : '竞品监控'}
+          </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-[#6F6D7A]">
-            按业务分类整理，或关联自己的站点；两个维度可以组合筛选。不必先建己方网站，也能独立监控公开竞品页面。
+            {view === 'research'
+              ? '先归档预调研与人工结论，再按需要手动建立监控。分析不会自动读取目标站或启动调度。'
+              : '仅查看公开页面的受控变化记录。监控不等于竞品流量、客户或转化数据。'}
           </p>
         </div>
         <p className="min-w-0 break-words text-sm text-[#6F6D7A]">
           工作区 · {current?.name ?? '正在加载'}
         </p>
+      </div>
+      <div
+        role="tablist"
+        aria-label="竞品功能"
+        className="inline-flex rounded-xl border border-[#E3E2E6] bg-white p-1"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'research'}
+          onClick={() => setView('research')}
+          className={`rounded-lg px-4 py-2 text-sm font-medium ${view === 'research' ? 'bg-[#3D3B4F] text-white' : 'text-[#6F6D7A] hover:bg-[#F9F8F6]'}`}
+        >
+          竞品分析
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'monitoring'}
+          onClick={() => setView('monitoring')}
+          className={`rounded-lg px-4 py-2 text-sm font-medium ${view === 'monitoring' ? 'bg-[#3D3B4F] text-white' : 'text-[#6F6D7A] hover:bg-[#F9F8F6]'}`}
+        >
+          竞品监控
+        </button>
       </div>
       {isLoading || sites.isLoading ? (
         <p role="status">正在加载站点…</p>
@@ -115,10 +156,43 @@ function CompetitorsPage(): ReactElement {
         <p className="rounded-2xl border bg-white p-8 text-sm">
           暂无可访问工作区，请检查登录状态或联系工作区拥有者。
         </p>
+      ) : view === 'research' ? (
+        <ResearchPanel key={`research:${current.id}`} workspaceId={current.id} sites={siteRows} />
       ) : (
-        <MonitorPanel key={current.id} workspaceId={current.id} sites={siteRows} />
+        <MonitorPanel key={`monitoring:${current.id}`} workspaceId={current.id} sites={siteRows} />
       )}
     </main>
+  );
+}
+
+function ResearchPanel({
+  workspaceId,
+  sites,
+}: {
+  workspaceId: string;
+  sites: OwnedSite[];
+}): ReactElement {
+  const groups = useQuery({
+    queryKey: ['competitor-categories', workspaceId],
+    queryFn: () => api.getCompetitorCategories(workspaceId),
+    retry: false,
+  });
+  const categories = groups.data?.data.categories ?? [];
+  return (
+    <>
+      <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6">
+        <h2 className="text-lg font-semibold text-[#3D3B4F]">先预调研，再决定是否监控</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6D7A]">
+          导入 Keyword Harvester 任务摘要与分析步骤，保留可复制的行动路径和 Codex
+          来源引用；确认后再写入研究库。创建研究档案或关联己方网站都不会创建监控。
+        </p>
+      </section>
+      {groups.error && <ErrorNotice error={groups.error} />}
+      <PreResearchLibrary workspaceId={workspaceId} />
+      {!groups.error && (
+        <ResearchLibrary workspaceId={workspaceId} sites={sites} categories={categories} />
+      )}
+    </>
   );
 }
 
@@ -387,9 +461,6 @@ function MonitorPanel({
               pending={mutation.isPending}
               onAction={action => mutation.mutateAsync(action)}
             />
-          )}
-          {!groups.error && (
-            <ResearchLibrary workspaceId={workspaceId} sites={sites} categories={categories} />
           )}
           <div className="grid gap-4 text-sm md:grid-cols-2">
             <div className="flex gap-3 rounded-xl border border-[#E3E2E6] bg-white p-4">
@@ -727,8 +798,14 @@ function CategoryManager({
   );
 }
 
-const splitList = (value: string): string[] =>
-  [...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean))];
+const splitList = (value: string): string[] => [
+  ...new Set(
+    value
+      .split(/[\n,]/)
+      .map(item => item.trim())
+      .filter(Boolean)
+  ),
+];
 
 function parsePaymentProviders(value: string): CompetitorResearchProfile['paymentProviders'] {
   const valid = new Set(['confirmed', 'evidence_only', 'disabled', 'unknown']);
@@ -736,9 +813,534 @@ function parsePaymentProviders(value: string): CompetitorResearchProfile['paymen
     const [provider, rawStatus] = item.split(':', 2).map(part => part.trim());
     return {
       provider,
-      status: valid.has(rawStatus) ? (rawStatus as CompetitorResearchProfile['paymentProviders'][number]['status']) : 'unknown',
+      status: valid.has(rawStatus)
+        ? (rawStatus as CompetitorResearchProfile['paymentProviders'][number]['status'])
+        : 'unknown',
     };
   });
+}
+
+function formatPaymentProviders(
+  providers: CompetitorResearchDraft['draft']['paymentProviders']
+): string {
+  return providers.map(provider => `${provider.provider}:${provider.status}`).join('\n');
+}
+
+function preResearchCopyText(
+  run: CompetitorPreResearchRun,
+  detail: CompetitorPreResearchDetail | undefined
+): string {
+  const actionLines = (detail?.actions ?? []).map(
+    (action: CompetitorPreResearchAction) =>
+      `- [${action.outcome}] ${action.kind}: ${action.title}${action.detail ? `\n  ${action.detail}` : ''}${action.references.length ? `\n  ${action.references.join(' · ')}` : ''}`
+  );
+  return [
+    `# ${run.title}`,
+    `来源任务：${run.sourceJobUrl}`,
+    `插件版本：${run.sourceVersion} · 采集状态：${run.harvestStatus} · 调研阶段：${preResearchStageLabels[run.stage]}`,
+    run.currentQuery ? `当前查询：${run.currentQuery}` : '',
+    run.seedKeywords.length ? `种子词：${run.seedKeywords.join('、')}` : '',
+    run.sourceThreadUrl ? `Codex 来源：${run.sourceThreadUrl}` : '',
+    run.summary ?? '',
+    actionLines.length ? `\n## 行动路径\n${actionLines.join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElement {
+  const client = useQueryClient();
+  const [filter, setFilter] = useState<CompetitorPreResearchStage | ''>('');
+  const [activeId, setActiveId] = useState('');
+  const [showImport, setShowImport] = useState(false);
+  const [sourceJobUrl, setSourceJobUrl] = useState('');
+  const [sourceVersion, setSourceVersion] = useState('0.7.15');
+  const [title, setTitle] = useState('');
+  const [currentQuery, setCurrentQuery] = useState('');
+  const [harvestStatus, setHarvestStatus] = useState('unknown');
+  const [seedKeywords, setSeedKeywords] = useState('');
+  const [summary, setSummary] = useState('');
+  const [sourceThreadUrl, setSourceThreadUrl] = useState('');
+  const [actionKind, setActionKind] = useState('note');
+  const [actionOutcome, setActionOutcome] = useState('completed');
+  const [actionTitle, setActionTitle] = useState('');
+  const [actionDetail, setActionDetail] = useState('');
+  const [actionReferences, setActionReferences] = useState('');
+  const [notice, setNotice] = useState('');
+  const runs = useQuery({
+    queryKey: ['competitor-pre-research', workspaceId, filter],
+    queryFn: () => api.getCompetitorPreResearch(workspaceId, filter ? { stage: filter } : {}),
+    retry: false,
+  });
+  const list = runs.data?.data.runs ?? [];
+  const selectedId = showImport ? '' : activeId || list[0]?.id || '';
+  const detail = useQuery({
+    queryKey: ['competitor-pre-research-detail', workspaceId, selectedId],
+    queryFn: () => api.getCompetitorPreResearchDetail(workspaceId, selectedId),
+    enabled: !!selectedId,
+    retry: false,
+  });
+  const mutation = useMutation({
+    mutationFn: (action: ResearchAction) =>
+      api.mutateCompetitor(
+        { workspaceId },
+        `/research/pre-research${action.suffix}`,
+        action.method,
+        action.body
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['competitor-pre-research', workspaceId] });
+      void client.invalidateQueries({ queryKey: ['competitor-pre-research-detail', workspaceId] });
+    },
+  });
+  const create = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      const result = (await mutation.mutateAsync({
+        suffix: '',
+        method: 'POST',
+        body: {
+          sourceJobUrl,
+          sourceVersion,
+          title,
+          currentQuery: currentQuery || null,
+          harvestStatus,
+          seedKeywords: splitList(seedKeywords),
+          summary: summary || null,
+          sourceThreadUrl: sourceThreadUrl || null,
+        },
+      })) as { data?: { id?: string } };
+      setActiveId(result.data?.id ?? '');
+      setShowImport(false);
+      setSourceJobUrl('');
+      setTitle('');
+      setCurrentQuery('');
+      setHarvestStatus('unknown');
+      setSeedKeywords('');
+      setSummary('');
+      setSourceThreadUrl('');
+      setNotice('预调研任务已归档；尚未创建竞品档案或监控。');
+    } catch {
+      return;
+    }
+  };
+  const appendAction = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!selectedId) return;
+    try {
+      await mutation.mutateAsync({
+        suffix: `/${encodeURIComponent(selectedId)}/actions`,
+        method: 'POST',
+        body: {
+          kind: actionKind,
+          outcome: actionOutcome,
+          title: actionTitle,
+          detail: actionDetail || null,
+          references: splitList(actionReferences),
+        },
+      });
+      setActionTitle('');
+      setActionDetail('');
+      setActionReferences('');
+      setNotice('行动步骤已加入当前预调研记录。');
+    } catch {
+      return;
+    }
+  };
+  const updateStage = async (stage: CompetitorPreResearchStage): Promise<void> => {
+    if (!selectedId) return;
+    try {
+      await mutation.mutateAsync({
+        suffix: `/${encodeURIComponent(selectedId)}/stage`,
+        method: 'PATCH',
+        body: { stage },
+      });
+      setNotice('预调研阶段已更新。');
+    } catch {
+      return;
+    }
+  };
+  const selected = list.find(run => run.id === selectedId);
+  return (
+    <section
+      className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6"
+      aria-label="竞品预调研"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-[#3D3B4F]">竞品预调研</h2>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
+            录入 Keyword Harvester 任务的摘要和后续行动，而非读取插件本地存储。每条记录可引用 Codex
+            任务，行动路径可单独查看和复制。
+          </p>
+        </div>
+        <label className="min-w-40 text-xs">
+          调研阶段
+          <select
+            className={`${controlClass} mt-2`}
+            value={filter}
+            onChange={event => setFilter(event.target.value as CompetitorPreResearchStage | '')}
+          >
+            <option value="">全部阶段</option>
+            {Object.entries(preResearchStageLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {runs.data?.data.canManage && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setActiveId('');
+              setShowImport(true);
+            }}
+          >
+            <Plus size={16} className="mr-2" />
+            导入预调研
+          </Button>
+        )}
+      </div>
+      {runs.error && (
+        <div className="mt-4">
+          <ErrorNotice error={runs.error} />
+          <Button className="mt-3" variant="outline" onClick={() => void runs.refetch()}>
+            重试读取预调研
+          </Button>
+        </div>
+      )}
+      {mutation.error && (
+        <div className="mt-4">
+          <ErrorNotice error={mutation.error} />
+        </div>
+      )}
+      {notice && (
+        <p role="status" className="mt-4 text-sm text-[#537695]">
+          {notice}
+        </p>
+      )}
+      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="space-y-3">
+          {runs.isLoading ? (
+            <p role="status" className="text-sm text-[#6F6D7A]">
+              正在读取预调研…
+            </p>
+          ) : !list.length ? (
+            <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
+              尚无预调研。空列表不代表没有竞品或关键词机会。
+            </p>
+          ) : (
+            list.map(run => (
+              <button
+                key={run.id}
+                type="button"
+                onClick={() => {
+                  setActiveId(run.id);
+                  setShowImport(false);
+                }}
+                className={`w-full rounded-xl border p-4 text-left ${run.id === selectedId ? 'border-[#537695] bg-[#F4F8FB]' : 'border-[#E3E2E6] bg-white hover:bg-[#F9F8F6]'}`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span className="font-semibold text-[#3D3B4F]">{run.title}</span>
+                  <span className="rounded-full bg-white px-2 py-1 text-xs text-[#6F6D7A]">
+                    {preResearchStageLabels[run.stage]}
+                  </span>
+                </div>
+                <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                  {run.currentQuery ?? '未记录当前查询'} · {run.actionCount} 个行动步骤
+                </p>
+                {run.seedKeywords.length > 0 && (
+                  <p className="mt-2 line-clamp-2 text-xs text-[#6F6D7A]">
+                    {run.seedKeywords.join(' · ')}
+                  </p>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+        {selected ? (
+          <div className="space-y-4 rounded-xl bg-[#F9F8F6] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-[#3D3B4F]">{selected.title}</h3>
+                <p className="mt-1 break-all text-xs text-[#6F6D7A]">{selected.sourceJobUrl}</p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(preResearchCopyText(selected, detail.data?.data))
+                    .then(() => setNotice('已复制预调研与当前行动路径。'))
+                    .catch(() => setNotice('无法访问剪贴板，请手动复制。'))
+                }
+              >
+                复制记录
+              </Button>
+            </div>
+            <dl className="grid gap-3 text-xs sm:grid-cols-2">
+              <div>
+                <dt className="text-[#6F6D7A]">插件版本 / 采集状态</dt>
+                <dd className="mt-1 break-words">
+                  {selected.sourceVersion} · {selected.harvestStatus}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[#6F6D7A]">当前查询</dt>
+                <dd className="mt-1 break-words">{selected.currentQuery ?? '未记录'}</dd>
+              </div>
+            </dl>
+            {selected.summary && (
+              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-[#555163]">
+                {selected.summary}
+              </p>
+            )}
+            {selected.seedKeywords.length > 0 && (
+              <p className="break-words text-xs text-[#6F6D7A]">
+                种子词：{selected.seedKeywords.join(' · ')}
+              </p>
+            )}
+            {selected.sourceThreadUrl && (
+              <a className="block break-all text-xs text-[#537695]" href={selected.sourceThreadUrl}>
+                来源任务：{selected.sourceThreadUrl}
+              </a>
+            )}
+            {runs.data?.data.canManage && (
+              <label className="block text-xs">
+                调研阶段
+                <select
+                  className={`${controlClass} mt-2`}
+                  value={selected.stage}
+                  disabled={mutation.isPending}
+                  onChange={event =>
+                    void updateStage(event.target.value as CompetitorPreResearchStage)
+                  }
+                >
+                  {Object.entries(preResearchStageLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {detail.isLoading ? (
+              <p role="status" className="text-sm text-[#6F6D7A]">
+                正在读取行动路径…
+              </p>
+            ) : detail.error ? (
+              <ErrorNotice error={detail.error} />
+            ) : (
+              <div className="space-y-3">
+                <h4 className="font-medium">行动路径</h4>
+                {detail.data?.data.actions.length ? (
+                  detail.data.data.actions.map(action => (
+                    <article
+                      key={action.id}
+                      className="rounded-lg border border-[#E3E2E6] bg-white p-3"
+                    >
+                      <p className="text-sm font-medium">{action.title}</p>
+                      <p className="mt-1 text-xs text-[#6F6D7A]">
+                        {action.kind} · {action.outcome} · {formatTime(action.occurredAt)}
+                      </p>
+                      {action.detail && (
+                        <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">
+                          {action.detail}
+                        </p>
+                      )}
+                      {action.references.length > 0 && (
+                        <p className="mt-2 break-words text-xs text-[#537695]">
+                          {action.references.join(' · ')}
+                        </p>
+                      )}
+                    </article>
+                  ))
+                ) : (
+                  <p className="rounded-lg bg-white p-3 text-sm text-[#6F6D7A]">
+                    尚未记录行动步骤。
+                  </p>
+                )}
+              </div>
+            )}
+            {runs.data?.data.canManage && (
+              <form
+                onSubmit={event => void appendAction(event)}
+                className="rounded-lg border border-[#E3E2E6] bg-white p-3"
+              >
+                <h4 className="font-medium">追加行动步骤</h4>
+                <fieldset disabled={mutation.isPending} className="mt-3 grid gap-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-xs">
+                      类型
+                      <select
+                        className={`${controlClass} mt-2`}
+                        value={actionKind}
+                        onChange={event => setActionKind(event.target.value)}
+                      >
+                        <option value="harvest">采集</option>
+                        <option value="review">查阅</option>
+                        <option value="analysis">分析</option>
+                        <option value="classification">分类</option>
+                        <option value="handoff">交接</option>
+                        <option value="note">备注</option>
+                      </select>
+                    </label>
+                    <label className="text-xs">
+                      结果
+                      <select
+                        className={`${controlClass} mt-2`}
+                        value={actionOutcome}
+                        onChange={event => setActionOutcome(event.target.value)}
+                      >
+                        <option value="completed">完成</option>
+                        <option value="partial">部分完成</option>
+                        <option value="failed">失败</option>
+                        <option value="skipped">跳过</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="text-xs">
+                    步骤标题
+                    <Input
+                      className="mt-2 min-h-11"
+                      value={actionTitle}
+                      onChange={event => setActionTitle(event.target.value)}
+                      required
+                      maxLength={160}
+                      placeholder="例如：核验定价页支付证据"
+                    />
+                  </label>
+                  <label className="text-xs">
+                    结论 / 原因（可选）
+                    <textarea
+                      className={`${controlClass} mt-2 min-h-20 py-2`}
+                      value={actionDetail}
+                      onChange={event => setActionDetail(event.target.value)}
+                      maxLength={1000}
+                    />
+                  </label>
+                  <label className="text-xs">
+                    证据链接（逗号或换行分隔，可选）
+                    <textarea
+                      className={`${controlClass} mt-2 min-h-20 py-2`}
+                      value={actionReferences}
+                      onChange={event => setActionReferences(event.target.value)}
+                      maxLength={1600}
+                      placeholder="https://example.com/pricing"
+                    />
+                  </label>
+                  <Button type="submit">
+                    <Plus size={16} className="mr-2" />
+                    保存行动步骤
+                  </Button>
+                </fieldset>
+              </form>
+            )}
+          </div>
+        ) : runs.data?.data.canManage ? (
+          <form onSubmit={event => void create(event)} className="rounded-xl bg-[#F9F8F6] p-4">
+            <h3 className="font-semibold">导入预调研</h3>
+            <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
+              <label className="text-xs">
+                Keyword Harvester 任务 URL
+                <Input
+                  className="mt-2 min-h-11"
+                  value={sourceJobUrl}
+                  onChange={event => setSourceJobUrl(event.target.value)}
+                  required
+                  maxLength={2048}
+                  placeholder="chrome-extension://…/harvest.html?job=…"
+                />
+              </label>
+              <label className="text-xs">
+                插件版本
+                <Input
+                  className="mt-2 min-h-11"
+                  value={sourceVersion}
+                  onChange={event => setSourceVersion(event.target.value)}
+                  required
+                  maxLength={40}
+                />
+              </label>
+              <label className="text-xs">
+                任务名称
+                <Input
+                  className="mt-2 min-h-11"
+                  value={title}
+                  onChange={event => setTitle(event.target.value)}
+                  required
+                  maxLength={160}
+                  placeholder="例如：image to prompt 递归采集"
+                />
+              </label>
+              <label className="text-xs">
+                当前 / 主查询（可选）
+                <Input
+                  className="mt-2 min-h-11"
+                  value={currentQuery}
+                  onChange={event => setCurrentQuery(event.target.value)}
+                  maxLength={200}
+                />
+              </label>
+              <label className="text-xs">
+                采集状态
+                <select
+                  className={`${controlClass} mt-2`}
+                  value={harvestStatus}
+                  onChange={event => setHarvestStatus(event.target.value)}
+                >
+                  <option value="unknown">未知</option>
+                  <option value="active">进行中</option>
+                  <option value="completed">已完成</option>
+                  <option value="paused">已暂停</option>
+                  <option value="partial">部分完成</option>
+                </select>
+              </label>
+              <label className="text-xs">
+                种子词（逗号或换行分隔）
+                <textarea
+                  className={`${controlClass} mt-2 min-h-20 py-2`}
+                  value={seedKeywords}
+                  onChange={event => setSeedKeywords(event.target.value)}
+                  maxLength={5000}
+                />
+              </label>
+              <label className="text-xs">
+                插件摘要 / 已知边界（可选）
+                <textarea
+                  className={`${controlClass} mt-2 min-h-20 py-2`}
+                  value={summary}
+                  onChange={event => setSummary(event.target.value)}
+                  maxLength={1000}
+                />
+              </label>
+              <label className="text-xs">
+                Codex 来源任务（可选）
+                <Input
+                  className="mt-2 min-h-11"
+                  value={sourceThreadUrl}
+                  onChange={event => setSourceThreadUrl(event.target.value)}
+                  maxLength={2048}
+                  placeholder="codex://threads/..."
+                />
+              </label>
+              <Button type="submit">
+                <Plus size={16} className="mr-2" />
+                归档预调研
+              </Button>
+            </fieldset>
+          </form>
+        ) : (
+          <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
+            当前账号只读，可查看已归档的预调研与行动路径。
+          </p>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function ResearchLibrary({
@@ -754,6 +1356,7 @@ function ResearchLibrary({
   const [filter, setFilter] = useState<CompetitorResearchStatus | ''>('');
   const [brandName, setBrandName] = useState('');
   const [homepageUrl, setHomepageUrl] = useState('');
+  const [pageTitle, setPageTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [keywords, setKeywords] = useState('');
   const [payments, setPayments] = useState('');
@@ -761,9 +1364,12 @@ function ResearchLibrary({
   const [threadUrl, setThreadUrl] = useState('');
   const [notes, setNotes] = useState('');
   const [newStatus, setNewStatus] = useState<CompetitorResearchStatus>('inbox');
+  const [notice, setNotice] = useState('');
+  const [generatedDraft, setGeneratedDraft] = useState<CompetitorResearchDraft | null>(null);
   const research = useQuery({
     queryKey: ['competitor-research', workspaceId, filter],
-    queryFn: () => api.getCompetitorResearch(workspaceId, filter ? { lifecycleStatus: filter } : {}),
+    queryFn: () =>
+      api.getCompetitorResearch(workspaceId, filter ? { lifecycleStatus: filter } : {}),
   });
   const monitors = useQuery({
     queryKey: ['competitors', workspaceId, 'research-link-options'],
@@ -771,11 +1377,56 @@ function ResearchLibrary({
   });
   const mutation = useMutation({
     mutationFn: (action: ResearchAction) =>
-      api.mutateCompetitor({ workspaceId }, `/research${action.suffix}`, action.method, action.body),
+      api.mutateCompetitor(
+        { workspaceId },
+        `/research${action.suffix}`,
+        action.method,
+        action.body
+      ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
   });
+  const draftMutation = useMutation({
+    mutationFn: () =>
+      api.generateCompetitorResearchDraft(workspaceId, {
+        homepageUrl,
+        brandName: brandName || null,
+        pageTitle: pageTitle || null,
+        productSummary: summary || null,
+        seedKeywords: splitList(keywords),
+      }),
+    onSuccess: result => {
+      setGeneratedDraft(result.data);
+      setNotice(
+        result.data.provider === 'glm'
+          ? `已由 ${result.data.model} 生成待核验草稿，尚未保存。`
+          : `GLM 未成功，本次由 Terra 后备 ${result.data.model} 生成待核验草稿，尚未保存。`
+      );
+    },
+  });
+  const generateDraft = async (): Promise<void> => {
+    if (!homepageUrl.trim()) {
+      setNotice('请先填写公开 HTTPS URL，再生成草稿。');
+      return;
+    }
+    try {
+      await draftMutation.mutateAsync();
+    } catch {
+      return;
+    }
+  };
+  const applyDraft = (): void => {
+    if (!generatedDraft) return;
+    setBrandName(generatedDraft.draft.brandName);
+    setPageTitle(generatedDraft.draft.pageTitle ?? '');
+    setSummary(generatedDraft.draft.productSummary ?? '');
+    setKeywords(generatedDraft.draft.seedKeywords.join('\n'));
+    if (!payments.trim() && generatedDraft.draft.paymentProviders.length)
+      setPayments(formatPaymentProviders(generatedDraft.draft.paymentProviders));
+    setGeneratedDraft(null);
+    setNotice('草稿已回填到表单；请人工核验证据后再保存研究档案。');
+  };
   const create = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     try {
@@ -785,6 +1436,7 @@ function ResearchLibrary({
         body: {
           brandName,
           homepageUrl,
+          pageTitle: pageTitle || null,
           productSummary: summary || null,
           lifecycleStatus: newStatus,
           seedKeywords: splitList(keywords),
@@ -796,12 +1448,14 @@ function ResearchLibrary({
       });
       setBrandName('');
       setHomepageUrl('');
+      setPageTitle('');
       setSummary('');
       setKeywords('');
       setPayments('');
       setSources('');
       setThreadUrl('');
       setNotes('');
+      setGeneratedDraft(null);
       setNewStatus('inbox');
     } catch {
       return;
@@ -810,7 +1464,10 @@ function ResearchLibrary({
   const profiles = research.data?.data.profiles ?? [];
   const canManage = research.data?.data.canManage ?? false;
   return (
-    <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6" aria-label="竞品研究库">
+    <section
+      className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6"
+      aria-label="竞品研究库"
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-[#3D3B4F]">竞品研究库</h2>
@@ -843,9 +1500,15 @@ function ResearchLibrary({
           </Button>
         </div>
       )}
-      {mutation.error && <div className="mt-4"><ErrorNotice error={mutation.error} /></div>}
+      {mutation.error && (
+        <div className="mt-4">
+          <ErrorNotice error={mutation.error} />
+        </div>
+      )}
       {research.isLoading ? (
-        <p role="status" className="mt-5 text-sm text-[#6F6D7A]">正在读取研究档案…</p>
+        <p role="status" className="mt-5 text-sm text-[#6F6D7A]">
+          正在读取研究档案…
+        </p>
       ) : (
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <div className="space-y-3">
@@ -868,52 +1531,192 @@ function ResearchLibrary({
             ))}
           </div>
           {canManage ? (
-            <form onSubmit={event => void create(event)} className="h-fit rounded-xl bg-[#F9F8F6] p-4">
+            <form
+              onSubmit={event => void create(event)}
+              className="h-fit rounded-xl bg-[#F9F8F6] p-4"
+            >
               <h3 className="font-semibold">保存研究结论</h3>
+              <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
+                可先用手动输入生成待核验草稿。只发送本表的
+                URL、标题、摘要和种子词；不会读取目标站、插件数据、Cookie 或 Codex
+                任务，也不会自动保存或创建监控。
+              </p>
+              {notice && (
+                <p role="status" className="mt-3 text-sm text-[#537695]">
+                  {notice}
+                </p>
+              )}
+              <Button
+                type="button"
+                className="mt-3"
+                variant="outline"
+                disabled={draftMutation.isPending}
+                onClick={() => void generateDraft()}
+              >
+                <Sparkles size={16} className="mr-2" />
+                {draftMutation.isPending ? '正在生成草稿…' : '生成待核验草稿'}
+              </Button>
+              {draftMutation.error && <ErrorNotice error={draftMutation.error} />}
+              {generatedDraft && (
+                <aside className="mt-4 rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 text-sm">
+                  <p className="font-medium text-[#3D3B4F]">
+                    {generatedDraft.provider === 'glm' ? 'GLM 优先模型' : 'Terra 后备模型'} ·{' '}
+                    {generatedDraft.model}
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-[#555163]">
+                    {generatedDraft.draft.productSummary ?? '未生成产品摘要'}
+                  </p>
+                  {generatedDraft.draft.seedKeywords.length > 0 && (
+                    <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                      建议种子词：{generatedDraft.draft.seedKeywords.join(' · ')}
+                    </p>
+                  )}
+                  {generatedDraft.draft.paymentProviders.length > 0 && (
+                    <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                      待核验支付候选：
+                      {generatedDraft.draft.paymentProviders.map(item => item.provider).join(' · ')}
+                    </p>
+                  )}
+                  {generatedDraft.draft.evidenceGaps.length > 0 && (
+                    <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                      待补证据：{generatedDraft.draft.evidenceGaps.join(' · ')}
+                    </p>
+                  )}
+                  <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
+                    {generatedDraft.limitations[1]}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button type="button" size="sm" onClick={applyDraft}>
+                      应用到表单
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setGeneratedDraft(null)}
+                    >
+                      丢弃草稿
+                    </Button>
+                  </div>
+                </aside>
+              )}
               <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
                 <label className="text-xs">
                   品牌 / 网站名称
-                  <Input className="mt-2 min-h-11" value={brandName} onChange={event => setBrandName(event.target.value)} required maxLength={100} placeholder="例如 OpenSourceGen" />
+                  <Input
+                    className="mt-2 min-h-11"
+                    value={brandName}
+                    onChange={event => setBrandName(event.target.value)}
+                    required
+                    maxLength={100}
+                    placeholder="例如 OpenSourceGen"
+                  />
                 </label>
                 <label className="text-xs">
                   首页公开 HTTPS URL
-                  <Input className="mt-2 min-h-11" type="url" value={homepageUrl} onChange={event => setHomepageUrl(event.target.value)} required maxLength={500} placeholder="https://example.com/" />
+                  <Input
+                    className="mt-2 min-h-11"
+                    type="url"
+                    value={homepageUrl}
+                    onChange={event => setHomepageUrl(event.target.value)}
+                    required
+                    maxLength={500}
+                    placeholder="https://example.com/"
+                  />
+                </label>
+                <label className="text-xs">
+                  页面标题 / 已知文案（可选）
+                  <Input
+                    className="mt-2 min-h-11"
+                    value={pageTitle}
+                    onChange={event => setPageTitle(event.target.value)}
+                    maxLength={200}
+                    placeholder="例如 AI Image Generator for Creators"
+                  />
                 </label>
                 <label className="text-xs">
                   初始状态
-                  <select className={`${controlClass} mt-2`} value={newStatus} onChange={event => setNewStatus(event.target.value as CompetitorResearchStatus)}>
-                    {Object.entries(researchStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  <select
+                    className={`${controlClass} mt-2`}
+                    value={newStatus}
+                    onChange={event => setNewStatus(event.target.value as CompetitorResearchStatus)}
+                  >
+                    {Object.entries(researchStatusLabels).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="text-xs">
                   产品 / 品类结论
-                  <textarea className={`${controlClass} mt-2 min-h-22 py-2`} value={summary} onChange={event => setSummary(event.target.value)} maxLength={4000} placeholder="例如：开源模型聚合的图片与视频生成工具" />
+                  <textarea
+                    className={`${controlClass} mt-2 min-h-22 py-2`}
+                    value={summary}
+                    onChange={event => setSummary(event.target.value)}
+                    maxLength={4000}
+                    placeholder="例如：开源模型聚合的图片与视频生成工具"
+                  />
                 </label>
                 <label className="text-xs">
                   种子词（逗号或换行分隔）
-                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={keywords} onChange={event => setKeywords(event.target.value)} maxLength={5000} placeholder="AI image generator, AI video generator" />
+                  <textarea
+                    className={`${controlClass} mt-2 min-h-20 py-2`}
+                    value={keywords}
+                    onChange={event => setKeywords(event.target.value)}
+                    maxLength={5000}
+                    placeholder="AI image generator, AI video generator"
+                  />
                 </label>
                 <label className="text-xs">
                   支付网关（`名称:状态`，状态为 confirmed / evidence_only / disabled / unknown）
-                  <Input className="mt-2 min-h-11" value={payments} onChange={event => setPayments(event.target.value)} maxLength={1200} placeholder="Stripe:confirmed, PayPal:evidence_only" />
+                  <Input
+                    className="mt-2 min-h-11"
+                    value={payments}
+                    onChange={event => setPayments(event.target.value)}
+                    maxLength={1200}
+                    placeholder="Stripe:confirmed, PayPal:evidence_only"
+                  />
                 </label>
                 <label className="text-xs">
                   证据来源 URL（逗号或换行分隔）
-                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={sources} onChange={event => setSources(event.target.value)} maxLength={5000} placeholder="https://example.com/pricing" />
+                  <textarea
+                    className={`${controlClass} mt-2 min-h-20 py-2`}
+                    value={sources}
+                    onChange={event => setSources(event.target.value)}
+                    maxLength={5000}
+                    placeholder="https://example.com/pricing"
+                  />
                 </label>
                 <label className="text-xs">
                   来源任务 / 备注链接（可选）
-                  <Input className="mt-2 min-h-11" value={threadUrl} onChange={event => setThreadUrl(event.target.value)} maxLength={2048} placeholder="codex://threads/..." />
+                  <Input
+                    className="mt-2 min-h-11"
+                    value={threadUrl}
+                    onChange={event => setThreadUrl(event.target.value)}
+                    maxLength={2048}
+                    placeholder="codex://threads/..."
+                  />
                 </label>
                 <label className="text-xs">
                   研究备注（可选）
-                  <textarea className={`${controlClass} mt-2 min-h-20 py-2`} value={notes} onChange={event => setNotes(event.target.value)} maxLength={4000} />
+                  <textarea
+                    className={`${controlClass} mt-2 min-h-20 py-2`}
+                    value={notes}
+                    onChange={event => setNotes(event.target.value)}
+                    maxLength={4000}
+                  />
                 </label>
-                <Button type="submit"><Plus size={16} className="mr-2" />保存研究档案</Button>
+                <Button type="submit">
+                  <Plus size={16} className="mr-2" />
+                  保存研究档案
+                </Button>
               </fieldset>
             </form>
           ) : (
-            <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">当前账号只读，可查看研究结论和关联关系。</p>
+            <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
+              当前账号只读，可查看研究结论和关联关系。
+            </p>
           )}
         </div>
       )}
@@ -942,9 +1745,16 @@ function ResearchProfileCard({
   const [categoryIds, setCategoryIds] = useState(profile.categories.map(category => category.id));
   const [siteIds, setSiteIds] = useState(profile.sites.map(site => site.id));
   const [monitorIds, setMonitorIds] = useState(profile.monitors.map(monitor => monitor.id));
-  const saveLinks = async (kind: 'categories' | 'sites' | 'monitors', ids: string[]): Promise<void> => {
+  const saveLinks = async (
+    kind: 'categories' | 'sites' | 'monitors',
+    ids: string[]
+  ): Promise<void> => {
     try {
-      await onAction({ suffix: `/${encodeURIComponent(profile.id)}/${kind}`, method: 'PUT', body: { ids } });
+      await onAction({
+        suffix: `/${encodeURIComponent(profile.id)}/${kind}`,
+        method: 'PUT',
+        body: { ids },
+      });
     } catch {
       return;
     }
@@ -956,36 +1766,102 @@ function ResearchProfileCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="break-words font-semibold text-[#3D3B4F]">{profile.brandName}</h3>
-          <a className="mt-1 block break-all text-xs text-[#537695]" href={profile.homepageUrl} target="_blank" rel="noopener noreferrer">{profile.homepageUrl}</a>
+          <a
+            className="mt-1 block break-all text-xs text-[#537695]"
+            href={profile.homepageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {profile.homepageUrl}
+          </a>
         </div>
         {canManage ? (
-          <select aria-label={`${profile.brandName}研究状态`} className="min-h-9 rounded-lg border px-2 text-xs" value={status} disabled={pending} onChange={event => {
-            const next = event.target.value as CompetitorResearchStatus;
-            setStatus(next);
-            void onAction({ suffix: `/${encodeURIComponent(profile.id)}`, method: 'PATCH', body: { lifecycleStatus: next } }).catch(() => {
-              setStatus(profile.lifecycleStatus);
-            });
-          }}>
-            {Object.entries(researchStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          <select
+            aria-label={`${profile.brandName}研究状态`}
+            className="min-h-9 rounded-lg border px-2 text-xs"
+            value={status}
+            disabled={pending}
+            onChange={event => {
+              const next = event.target.value as CompetitorResearchStatus;
+              setStatus(next);
+              void onAction({
+                suffix: `/${encodeURIComponent(profile.id)}`,
+                method: 'PATCH',
+                body: { lifecycleStatus: next },
+              }).catch(() => {
+                setStatus(profile.lifecycleStatus);
+              });
+            }}
+          >
+            {Object.entries(researchStatusLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
-        ) : <span className="rounded-full bg-[#F9F8F6] px-2 py-1 text-xs">{researchStatusLabels[profile.lifecycleStatus]}</span>}
+        ) : (
+          <span className="rounded-full bg-[#F9F8F6] px-2 py-1 text-xs">
+            {researchStatusLabels[profile.lifecycleStatus]}
+          </span>
+        )}
       </div>
-      {profile.productSummary && <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[#555163]">{profile.productSummary}</p>}
+      {profile.productSummary && (
+        <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[#555163]">
+          {profile.productSummary}
+        </p>
+      )}
       <ResearchChips label="种子词" values={profile.seedKeywords} />
-      <ResearchChips label="支付" values={profile.paymentProviders.map(item => `${item.provider} · ${item.status}`)} />
+      <ResearchChips
+        label="支付"
+        values={profile.paymentProviders.map(item => `${item.provider} · ${item.status}`)}
+      />
       <ResearchChips label="业务分类" values={profile.categories.map(category => category.name)} />
       <ResearchChips label="关联站点" values={profile.sites.map(site => site.name)} />
       <ResearchChips label="关联监控" values={profile.monitors.map(monitor => monitor.name)} />
-      {profile.sources.length > 0 && <p className="mt-3 break-words text-xs leading-5 text-[#6F6D7A]">证据来源：{profile.sources.map(source => source.url).join(' · ')}</p>}
-      {profile.notes && <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">备注：{profile.notes}</p>}
+      {profile.sources.length > 0 && (
+        <p className="mt-3 break-words text-xs leading-5 text-[#6F6D7A]">
+          证据来源：{profile.sources.map(source => source.url).join(' · ')}
+        </p>
+      )}
+      {profile.notes && (
+        <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">
+          备注：{profile.notes}
+        </p>
+      )}
       {canManage && (
         <details className="mt-4 rounded-lg bg-[#F9F8F6] p-3">
           <summary className="cursor-pointer text-sm font-medium">手动划分与关联</summary>
           <div className="mt-4 grid gap-3">
-            <ResearchLinkSelect label="业务分类（多选）" value={categoryIds} options={categories.map(category => ({ id: category.id, label: category.name }))} disabled={pending} onChange={event => setCategoryIds(selected(event))} onSave={() => void saveLinks('categories', categoryIds)} />
-            <ResearchLinkSelect label="己方网站（多选）" value={siteIds} options={sites.map(site => ({ id: site.id, label: `${site.name} · ${site.domain}` }))} disabled={pending} onChange={event => setSiteIds(selected(event))} onSave={() => void saveLinks('sites', siteIds)} />
-            <ResearchLinkSelect label="已有监控（多选）" value={monitorIds} options={monitors.map(monitor => ({ id: monitor.id, label: `${monitor.name} · ${monitor.url}` }))} disabled={pending} onChange={event => setMonitorIds(selected(event))} onSave={() => void saveLinks('monitors', monitorIds)} />
-            <p className="text-xs leading-5 text-[#6F6D7A]">研究档案不会新增监控。需监控时先在下方“添加公开页面”中手动创建，并保持手动频率；再回到这里关联该已有记录。</p>
+            <ResearchLinkSelect
+              label="业务分类（多选）"
+              value={categoryIds}
+              options={categories.map(category => ({ id: category.id, label: category.name }))}
+              disabled={pending}
+              onChange={event => setCategoryIds(selected(event))}
+              onSave={() => void saveLinks('categories', categoryIds)}
+            />
+            <ResearchLinkSelect
+              label="己方网站（多选）"
+              value={siteIds}
+              options={sites.map(site => ({ id: site.id, label: `${site.name} · ${site.domain}` }))}
+              disabled={pending}
+              onChange={event => setSiteIds(selected(event))}
+              onSave={() => void saveLinks('sites', siteIds)}
+            />
+            <ResearchLinkSelect
+              label="已有监控（多选）"
+              value={monitorIds}
+              options={monitors.map(monitor => ({
+                id: monitor.id,
+                label: `${monitor.name} · ${monitor.url}`,
+              }))}
+              disabled={pending}
+              onChange={event => setMonitorIds(selected(event))}
+              onSave={() => void saveLinks('monitors', monitorIds)}
+            />
+            <p className="text-xs leading-5 text-[#6F6D7A]">
+              研究档案不会新增监控。需监控时先在下方“添加公开页面”中手动创建，并保持手动频率；再回到这里关联该已有记录。
+            </p>
           </div>
         </details>
       )}
@@ -993,9 +1869,20 @@ function ResearchProfileCard({
   );
 }
 
-function ResearchChips({ label, values }: { label: string; values: string[] }): ReactElement | null {
+function ResearchChips({
+  label,
+  values,
+}: {
+  label: string;
+  values: string[];
+}): ReactElement | null {
   if (!values.length) return null;
-  return <p className="mt-3 break-words text-xs text-[#6F6D7A]"><span className="mr-2">{label}</span>{values.join(' · ')}</p>;
+  return (
+    <p className="mt-3 break-words text-xs text-[#6F6D7A]">
+      <span className="mr-2">{label}</span>
+      {values.join(' · ')}
+    </p>
+  );
 }
 
 function ResearchLinkSelect({
@@ -1016,10 +1903,29 @@ function ResearchLinkSelect({
   return (
     <label className="text-xs">
       {label}
-      <select multiple className={`${controlClass} mt-2 min-h-24 py-2`} value={value} disabled={disabled} onChange={onChange}>
-        {options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+      <select
+        multiple
+        className={`${controlClass} mt-2 min-h-24 py-2`}
+        value={value}
+        disabled={disabled}
+        onChange={onChange}
+      >
+        {options.map(option => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
       </select>
-      <Button type="button" className="mt-2" size="sm" variant="outline" disabled={disabled} onClick={onSave}>保存关联</Button>
+      <Button
+        type="button"
+        className="mt-2"
+        size="sm"
+        variant="outline"
+        disabled={disabled}
+        onClick={onSave}
+      >
+        保存关联
+      </Button>
     </label>
   );
 }
