@@ -883,6 +883,7 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal(calls[0].body.max_tokens, 4200);
   assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
   assert.match(JSON.stringify(calls[0].body.messages), /产品类别与定位/);
+  assert.match(JSON.stringify(calls[0].body.messages), /single most important/);
   assert.match(JSON.stringify(calls[0].body.messages), /900–2200 Chinese characters/);
 });
 

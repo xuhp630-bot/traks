@@ -830,28 +830,8 @@ function formatPaymentProviders(
 
 type ResearchTextSection = { title: string | null; content: string };
 
-const rawInputLabel =
-  /^\s*([A-Za-z][A-Za-z0-9 /&+()._-]{0,78}|[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9 /&+()._-]{0,78})\s*[：:]\s*(.*)$/;
 const analysisSectionLabel =
   /^(产品类别与定位|可见工具(?:\/类别)?覆盖|可能的用户任务(?:（[^）]{0,40}）)?|关键词角度|支付(?:网关|证据|方式)?|(?:待补|缺失)证据|品牌(?:与产品)?|目标用户|商业模式|页面内容|优势(?:与差异)?|竞争定位)\s*[：:]/;
-
-function rawInputSections(value: string): ResearchTextSection[] {
-  const sections: ResearchTextSection[] = [];
-  let current: ResearchTextSection | null = null;
-  for (const line of value.split(/\r?\n/)) {
-    const match = line.match(rawInputLabel);
-    if (match) {
-      current = { title: match[1].trim(), content: match[2].trim() };
-      sections.push(current);
-    } else if (current) {
-      current.content = [current.content, line.trim()].filter(Boolean).join('\n');
-    } else if (line.trim()) {
-      current = { title: null, content: line.trim() };
-      sections.push(current);
-    }
-  }
-  return sections.length ? sections : [{ title: null, content: value }];
-}
 
 function sentenceSections(value: string): ResearchTextSection[] {
   const sentences = value
@@ -884,14 +864,23 @@ function detailedAnalysisSections(value: string): ResearchTextSection[] {
   return sections.length > 1 || sections[0]?.title ? sections : sentenceSections(value);
 }
 
+function keyFinding(profile: CompetitorResearchProfile): string | null {
+  if (profile.productSummary?.trim()) return profile.productSummary.trim();
+  if (!profile.analysis) return null;
+  const sections = detailedAnalysisSections(profile.analysis.detailedAnalysis);
+  return (
+    sections.find(section => section.title === '产品类别与定位')?.content ??
+    sections[0]?.content ??
+    null
+  );
+}
+
 function ResearchTextSections({
   sections,
   emptyLabel,
-  variant = 'default',
 }: {
   sections: ResearchTextSection[];
   emptyLabel: string;
-  variant?: 'default' | 'source';
 }): ReactElement {
   if (!sections.length) return <p className="text-xs text-[#6F6D7A]">{emptyLabel}</p>;
   return (
@@ -899,9 +888,7 @@ function ResearchTextSections({
       {sections.map((section, index) => (
         <section
           key={`${section.title ?? 'text'}-${index}`}
-          className={`rounded-lg border px-3 py-2 ${
-            variant === 'source' ? 'border-[#C9D9E6] bg-[#F4F8FB]' : 'border-[#E3E2E6] bg-white'
-          }`}
+          className="rounded-lg border border-[#E3E2E6] bg-white px-3 py-2"
         >
           {section.title && (
             <h4 className="text-xs font-semibold uppercase tracking-wide text-[#3D3B4F]">
@@ -1606,8 +1593,6 @@ function ResearchLibrary({
     }
   };
   const profiles = research.data?.data.profiles ?? [];
-  const rawInputPreview = rawInput.trim() ? rawInputSections(rawInput) : [];
-  const labeledRawInputCount = rawInputPreview.filter(section => section.title).length;
   const selectedProfile =
     profiles.find(profile => profile.id === selectedProfileId) ?? profiles[0] ?? null;
   const canManage = research.data?.data.canManage ?? false;
@@ -1695,23 +1680,6 @@ function ResearchLibrary({
                 }
               />
             </label>
-            {rawInputPreview.length > 0 && (
-              <aside className="mt-3 rounded-lg border border-[#C9D9E6] bg-white/75 p-3">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <p className="text-xs font-semibold text-[#3D3B4F]">输入预览</p>
-                  <p className="text-[11px] text-[#6F6D7A]">
-                    已识别 {labeledRawInputCount} 个标签字段
-                  </p>
-                </div>
-                <div className="mt-2 max-h-52 overflow-auto pr-1">
-                  <ResearchTextSections
-                    sections={rawInputPreview}
-                    emptyLabel="尚未识别可展示的输入字段。"
-                    variant="source"
-                  />
-                </div>
-              </aside>
-            )}
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
               必须包含公开 HTTPS
               URL。模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。
@@ -2165,6 +2133,10 @@ function ResearchProfileCard({
   };
   const selected = (event: FormEvent<HTMLSelectElement>): string[] =>
     Array.from(event.currentTarget.selectedOptions, option => option.value);
+  const primaryFinding = keyFinding(profile);
+  const analysisSections = profile.analysis
+    ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
+    : [];
   return (
     <article className="rounded-xl border border-[#E3E2E6] bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2252,30 +2224,34 @@ function ResearchProfileCard({
             <section className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-3">
               <h5 className="text-sm font-semibold text-[#3D3B4F]">输入资料</h5>
               <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
-                已保存的公开资料，按原始标签分段展示。
+                已保存的公开资料原文，可直接复制；不会在此处修改原始记录。
               </p>
-              <div className="mt-3 max-h-[34rem] overflow-auto pr-1">
-                <ResearchTextSections
-                  sections={profile.rawInput ? rawInputSections(profile.rawInput) : []}
-                  emptyLabel="未保存原始输入。"
-                  variant="source"
-                />
-              </div>
+              <textarea
+                aria-label={`${profile.brandName}原始输入资料`}
+                className={`${controlClass} mt-3 h-[34rem] resize-y py-3 font-mono text-xs leading-5 text-[#555163]`}
+                readOnly
+                value={profile.rawInput ?? ''}
+                placeholder="未保存原始输入。"
+              />
             </section>
             <section className="rounded-xl border border-[#C9D9E6] bg-white p-3">
               <h5 className="text-sm font-semibold text-[#3D3B4F]">分析结果</h5>
               <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
                 模型结论仅基于左侧输入，分类和支付判断仍需人工核验。
               </p>
+              {primaryFinding && (
+                <aside className="mt-3 rounded-lg border border-[#9BD5C4] bg-[#ECFBF5] p-3">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#1F6F57]">
+                    <Sparkles size={15} aria-hidden="true" />
+                    重点结论
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[#245341]">
+                    {primaryFinding}
+                  </p>
+                </aside>
+              )}
               <div className="mt-3 max-h-[34rem] overflow-auto pr-1">
-                <ResearchTextSections
-                  sections={
-                    profile.analysis
-                      ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
-                      : []
-                  }
-                  emptyLabel="未保存详细分析。"
-                />
+                <ResearchTextSections sections={analysisSections} emptyLabel="未保存详细分析。" />
               </div>
               {profile.analysis && (
                 <>
