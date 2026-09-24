@@ -876,6 +876,7 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
   assert.equal(calls[0].body.max_tokens, 3200);
   assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
+  assert.match(JSON.stringify(calls[0].body.messages), /产品类别与定位/);
 });
 
 test('pasted research intake saves source and detailed analysis without creating a monitor', async () => {
