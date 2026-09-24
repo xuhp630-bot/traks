@@ -69,7 +69,7 @@ if (live?.data?.version === localVersion && process.env.FORCE_RELEASE !== '1') {
 
 const sha256hex = d => createHash('sha256').update(d).digest('hex');
 const verify = await fetch(
-  `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/tokens/verify`,
+  'https://api.cloudflare.com/client/v4/user/tokens/verify',
   { headers: { Authorization: `Bearer ${token}` } }
 ).then(r => r.json());
 const keyId = verify?.result?.id;
