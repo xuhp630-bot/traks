@@ -302,6 +302,14 @@ function providerFailureDetail(
   return details.length ? ` (${details.join(', ')})` : '';
 }
 
+function researchGenerationFailureMessage(
+  attempts: { provider: string; outcome: string; reason?: string }[]
+): string {
+  if (attempts.some(attempt => attempt.reason === 'truncated_response'))
+    return `AI research generation returned an incomplete response after an automatic compact retry. The configured model could not finish this input; keep only the relevant title, URL, headings, pricing, and payment evidence, then try again.${providerFailureDetail(attempts)}`;
+  return `AI research generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(attempts)}`;
+}
+
 function preResearchRoutes() {
   return new Hono<{ Bindings: Bindings; Variables: Variables }>()
     .get('/', validate('query', competitorPreResearchFilters), async c => {
@@ -558,7 +566,7 @@ function researchRoutes() {
       if (!generated.ok)
         return c.json(
           {
-            error: `AI research generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(generated.attempts)}`,
+            error: researchGenerationFailureMessage(generated.attempts),
             attempts: generated.attempts,
           },
           503
@@ -812,7 +820,7 @@ function researchRoutes() {
         if (!generated.ok)
           return c.json(
             {
-              error: `AI research generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(generated.attempts)}`,
+              error: researchGenerationFailureMessage(generated.attempts),
               attempts: generated.attempts,
             },
             503
