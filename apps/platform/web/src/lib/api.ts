@@ -11,6 +11,8 @@ import type {
   CompetitorPreResearchReport,
   CompetitorResearchDraft,
   CompetitorResearchDraftInput,
+  CompetitorResearchDeepImportInput,
+  CompetitorResearchDeepImportResultResponse,
   CompetitorResearchFilters,
   CompetitorResearchIntakeInput,
   CompetitorResearchIntakeResult,
@@ -173,6 +175,34 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(input),
     });
+    await assertOk(response);
+    return response.json();
+  },
+  async importCompetitorResearch(
+    workspaceId: string,
+    input: CompetitorResearchDeepImportInput
+  ): Promise<{ data: CompetitorResearchDeepImportResultResponse }> {
+    const response = await fetch(`${competitorRoot({ workspaceId })}/research/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    await assertOk(response);
+    return response.json();
+  },
+  async replaceCompetitorResearch(
+    workspaceId: string,
+    profileId: string,
+    input: CompetitorResearchDeepImportInput
+  ): Promise<{ data: CompetitorResearchDeepImportResultResponse }> {
+    const response = await fetch(
+      `${competitorRoot({ workspaceId })}/research/${encodeURIComponent(profileId)}/import`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      }
+    );
     await assertOk(response);
     return response.json();
   },

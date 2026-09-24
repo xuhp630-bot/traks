@@ -14,7 +14,7 @@
 import type { Context } from 'hono';
 import {
   PERIODS,
-  competitorResearchLocalCapability,
+  competitorResearchDeepImportInput,
   competitorResearchLocalCapabilityMetadata,
   trackerSnippet,
 } from '@traks/shared';
@@ -128,15 +128,12 @@ const competitorResearchArgs = z
   })
   .strict();
 const competitorResearchImportArgs = z
-  .object({
-    workspaceId: competitorId,
-    rawInput: z.string().trim().min(20).max(12_000),
-    lifecycleStatus: z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']).default('inbox'),
-    primaryGroupId: competitorId,
-    localCapabilityId: competitorResearchLocalCapability,
-    sourceThreadUrl: z.string().trim().min(1).max(2048),
-  })
-  .strict();
+  .object({ workspaceId: competitorId })
+  .passthrough()
+  .refine(args => {
+    const { workspaceId: _workspaceId, ...body } = args;
+    return competitorResearchDeepImportInput.safeParse(body).success;
+  });
 const competitorPreResearchArgs = z
   .object({
     workspaceId: competitorId,
@@ -258,14 +255,15 @@ const TOOLS: ToolDef[] = [
   {
     name: 'import_competitor_research',
     description:
-      'Save a completed, evidence-backed local Codex Skill result into the competitor research library. Use only after the named local Skill has completed. The caller must provide its Codex task URL and public-source evidence in rawInput. This does not run a local Skill, crawl a target, create a monitor, approve a host, or schedule a check.',
+      'Save a completed, evidence-backed local Codex Skill report into the competitor research library without calling an AI model or compressing the report. Use only after the named local Skill has completed. This does not run a local Skill, crawl a target, create a monitor, approve a host, or schedule a check.',
     inputSchema: {
       type: 'object',
       properties: {
         workspaceId: str('Workspace id from list_competitor_workspaces'),
-        rawInput: str(
-          'Completed local Skill output including a public HTTPS homepage URL and evidence URLs'
-        ),
+        brandName: str('Competitor brand or product name'),
+        homepageUrl: str('Public HTTPS homepage URL for this research profile'),
+        pageTitle: str('Optional public page title'),
+        productSummary: str('Optional concise evidence-bound conclusion'),
         primaryGroupId: str(
           'Existing root-term and major-category group id that owns this research result'
         ),
@@ -280,29 +278,77 @@ const TOOLS: ToolDef[] = [
           description: 'Local Skill that produced this completed evidence package',
         },
         sourceThreadUrl: str('Codex task URL that contains the local Skill run'),
+        seedKeywords: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Distinct seed keywords from the completed local report',
+        },
+        paymentProviders: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              provider: str('Payment provider name'),
+              status: {
+                type: 'string',
+                enum: ['confirmed', 'evidence_only', 'disabled', 'unknown'],
+              },
+              evidence: str('Public evidence and its confidence boundary'),
+            },
+            required: ['provider'],
+          },
+          description: 'Payment evidence from the completed local report',
+        },
+        sources: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              url: str('Public source URL'),
+              kind: {
+                type: 'string',
+                enum: ['landing', 'pricing', 'checkout', 'manual', 'other'],
+              },
+              note: str('What this public source substantiates'),
+            },
+            required: ['url'],
+          },
+          description: 'Public source evidence cited by the local report',
+        },
+        detailedAnalysis: str(
+          'Complete local Skill report in Markdown or plain text. It is saved verbatim, not sent to GLM or Terra.'
+        ),
+        suggestedCategories: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional manual category suggestions from the local report',
+        },
+        evidenceGaps: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit missing or unverified evidence',
+        },
       },
       required: [
         'workspaceId',
-        'rawInput',
+        'brandName',
+        'homepageUrl',
         'primaryGroupId',
         'localCapabilityId',
         'sourceThreadUrl',
+        'detailedAnalysis',
       ],
       additionalProperties: false,
     },
     validateArgs: args => competitorResearchImportArgs.safeParse(args).success,
-    request: args => ({
-      method: 'POST',
-      path: `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research/intake`,
-      body: {
-        rawInput: args.rawInput,
-        lifecycleStatus: args.lifecycleStatus,
-        primaryGroupId: args.primaryGroupId,
-        researchMode: 'codex_local_handoff',
-        localCapabilityId: args.localCapabilityId,
-        sourceThreadUrl: args.sourceThreadUrl,
-      },
-    }),
+    request: args => {
+      const { workspaceId, ...body } = args;
+      return {
+        method: 'POST',
+        path: `/api/competitors/workspaces/${encodeURIComponent(String(workspaceId))}/research/import`,
+        body,
+      };
+    },
   },
   {
     name: 'get_competitor_pre_research',

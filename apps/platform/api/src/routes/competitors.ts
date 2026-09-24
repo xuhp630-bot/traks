@@ -11,6 +11,7 @@ import {
   competitorResearchFilters,
   competitorResearchDraftInput,
   competitorResearchIntakeInput,
+  competitorResearchDeepImportInput,
   competitorResearchRegenerateInput,
   competitorResearchInput,
   competitorResearchLinksInput,
@@ -291,6 +292,45 @@ function researchSources(rawInput: string, homepageUrl: URL, researchMode: strin
           : '用户粘贴的网站资料，未自动抓取。',
     };
   });
+}
+
+function importedResearchSources(
+  sources: z.infer<typeof competitorResearchDeepImportInput>['sources'],
+  homepageUrl: URL
+) {
+  const byUrl = new Map<string, (typeof sources)[number]>();
+  for (const source of [{ url: homepageUrl.href, kind: 'landing' as const }, ...sources]) {
+    try {
+      const url = new URL(source.url);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+      if (!byUrl.has(url.href))
+        byUrl.set(url.href, {
+          ...source,
+          url: url.href,
+          note: source.note ?? '本机 Skill 已列出的公开证据；Traks 未抓取该页面。',
+        });
+    } catch {
+      continue;
+    }
+  }
+  return [...byUrl.values()].slice(0, 20);
+}
+
+function deepResearchAnalysis(
+  body: z.infer<typeof competitorResearchDeepImportInput>,
+  generatedAt: number
+) {
+  return {
+    researchMode: 'codex_local_handoff' as const,
+    localCapabilityId: body.localCapabilityId,
+    workflow: 'local-skill-evidence-import-v1' as const,
+    provider: 'local_skill' as const,
+    model: null,
+    generatedAt,
+    detailedAnalysis: body.detailedAnalysis,
+    suggestedCategories: body.suggestedCategories,
+    evidenceGaps: body.evidenceGaps,
+  };
 }
 
 function providerFailureDetail(
@@ -650,6 +690,86 @@ function researchRoutes() {
         201
       );
     })
+    .post('/import', validate('json', competitorResearchDeepImportInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const body = c.req.valid('json');
+      const invalidGroup = await validateResearchGroup(c, scope.workspaceId, body.primaryGroupId);
+      if (invalidGroup) return invalidGroup;
+      let url: URL;
+      try {
+        url = publicPageUrl(body.homepageUrl);
+      } catch (error) {
+        return c.json(
+          { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+          400
+        );
+      }
+      const existing = await c.env.DB.prepare(
+        'SELECT id FROM competitor_research_profiles WHERE workspace_id = ? AND homepage_url = ?'
+      )
+        .bind(scope.workspaceId, url.href)
+        .first<{ id: string }>();
+      if (existing)
+        return c.json({
+          data: {
+            source: 'existing_research_profile',
+            profileId: existing.id,
+            existing: true,
+            limitations: [
+              'An existing research profile already uses this homepage URL; no local Skill report was saved or overwritten.',
+              'Use the explicit local-report replacement action to preserve the root-term grouping, links, and notes while replacing the imported report.',
+              'No competitor monitor or scheduler was created or changed.',
+            ],
+          },
+        });
+      const savedAt = Date.now();
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,primary_group_id,seed_keywords,payment_providers,sources,source_thread_url,raw_input,analysis,created_at,updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+      )
+        .bind(
+          id,
+          scope.workspaceId,
+          body.brandName,
+          url.href,
+          url.hostname,
+          body.pageTitle,
+          body.productSummary,
+          body.lifecycleStatus,
+          body.primaryGroupId,
+          JSON.stringify(body.seedKeywords),
+          JSON.stringify(body.paymentProviders),
+          JSON.stringify(importedResearchSources(body.sources, url)),
+          body.sourceThreadUrl,
+          body.detailedAnalysis,
+          JSON.stringify(deepResearchAnalysis(body, savedAt)),
+          savedAt,
+          savedAt,
+          scope.workspaceId,
+          COMPETITOR_LIMITS.researchProfiles
+        )
+        .first();
+      if (!created)
+        return c.json(
+          { error: 'Duplicate homepage URL or 500-profile workspace limit reached' },
+          409
+        );
+      return c.json(
+        {
+          data: {
+            source: 'codex_local_handoff',
+            profileId: id,
+            savedAt,
+            limitations: [
+              'The completed local Skill report was saved without an AI-model request, compression, target fetch, or browser-extension read.',
+              'No competitor monitor or scheduler was created.',
+            ],
+          },
+        },
+        201
+      );
+    })
     .get('/', validate('query', competitorResearchFilters), async c => {
       const scope = await access(c);
       if (scope instanceof Response) return scope;
@@ -714,6 +834,63 @@ function researchRoutes() {
           409
         );
       return c.json({ data: { id } }, 201);
+    })
+    .put('/:profileId/import', validate('json', competitorResearchDeepImportInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
+        return c.json({ error: 'Research profile not found' }, 404);
+      const body = c.req.valid('json');
+      const invalidGroup = await validateResearchGroup(c, scope.workspaceId, body.primaryGroupId);
+      if (invalidGroup) return invalidGroup;
+      let url: URL;
+      try {
+        url = publicPageUrl(body.homepageUrl);
+      } catch (error) {
+        return c.json(
+          { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+          400
+        );
+      }
+      const savedAt = Date.now();
+      const updated = await c.env.DB.prepare(
+        'UPDATE competitor_research_profiles SET brand_name = ?, homepage_url = ?, hostname = ?, page_title = ?, product_summary = ?, lifecycle_status = ?, primary_group_id = ?, seed_keywords = ?, payment_providers = ?, sources = ?, source_thread_url = ?, raw_input = ?, analysis = ?, updated_at = ? WHERE id = ? AND workspace_id = ? RETURNING id'
+      )
+        .bind(
+          body.brandName,
+          url.href,
+          url.hostname,
+          body.pageTitle,
+          body.productSummary,
+          body.lifecycleStatus,
+          body.primaryGroupId,
+          JSON.stringify(body.seedKeywords),
+          JSON.stringify(body.paymentProviders),
+          JSON.stringify(importedResearchSources(body.sources, url)),
+          body.sourceThreadUrl,
+          body.detailedAnalysis,
+          JSON.stringify(deepResearchAnalysis(body, savedAt)),
+          savedAt,
+          id,
+          scope.workspaceId
+        )
+        .first();
+      if (!updated)
+        return c.json({ error: 'Research profile changed or duplicate homepage URL' }, 409);
+      return c.json({
+        data: {
+          source: 'codex_local_handoff',
+          profileId: id,
+          savedAt,
+          replaced: true,
+          limitations: [
+            'The completed local Skill report replaced this profile without an AI-model request, compression, target fetch, or browser-extension read.',
+            'Existing fine-grained categories, linked owned sites, linked monitors, and notes were preserved.',
+            'No competitor monitor or scheduler was created.',
+          ],
+        },
+      });
     })
     .patch('/:profileId', validate('json', competitorResearchUpdate), async c => {
       const scope = await access(c, true);
@@ -808,6 +985,24 @@ function researchRoutes() {
             },
             400
           );
+        try {
+          const previous = profile.analysis ? JSON.parse(profile.analysis) : null;
+          if (
+            previous &&
+            typeof previous === 'object' &&
+            (previous as Record<string, unknown>).researchMode === 'codex_local_handoff' &&
+            (previous as Record<string, unknown>).provider === 'local_skill'
+          )
+            return c.json(
+              {
+                error:
+                  'This profile contains a complete local Skill report. Re-import the completed local report to replace it; AI regeneration would discard its evidence.',
+              },
+              409
+            );
+        } catch {
+          return c.json({ error: 'Stored research analysis is invalid' }, 409);
+        }
         const generated = await generateCompetitorResearchIntake(
           c.env,
           {
@@ -1184,11 +1379,13 @@ app.onError((error, c) => {
 });
 app.use('*', requireAuth);
 app.use('*', async (c, next) => {
-  const maxSize = c.req.path.includes('/research/intake')
-    ? 16 * 1024
-    : c.req.path.includes('/research/pre-research') || c.req.path.includes('/research/draft')
-      ? 12 * 1024
-      : 2048;
+  const maxSize = /\/research(?:\/[^/]+)?\/import$/.test(c.req.path)
+    ? 256 * 1024
+    : c.req.path.includes('/research/intake')
+      ? 16 * 1024
+      : c.req.path.includes('/research/pre-research') || c.req.path.includes('/research/draft')
+        ? 12 * 1024
+        : 2048;
   await bodyLimit({ maxSize, onError: c => c.json({ error: 'Request too large' }, 413) })(c, next);
 });
 app.use('*', async (c, next) => {

@@ -9,7 +9,10 @@ export const competitorResearchIntakeMode = z.enum([
 ]);
 export const competitorResearchModelPreference = z.enum(['auto', 'glm', 'terra']);
 export type CompetitorResearchModelPreference = z.infer<typeof competitorResearchModelPreference>;
-export const competitorResearchAnalysisWorkflow = z.enum(['competitor-analysis-evidence-bound-v1']);
+export const competitorResearchAnalysisWorkflow = z.enum([
+  'competitor-analysis-evidence-bound-v1',
+  'local-skill-evidence-import-v1',
+]);
 export type CompetitorResearchAnalysisWorkflow = z.infer<typeof competitorResearchAnalysisWorkflow>;
 export const competitorResearchLocalCapability = z.enum([
   'competitor-analysis',
@@ -247,6 +250,44 @@ export const competitorResearchIntakeInput = z
       path: ['localCapabilityId'],
     }
   );
+export const competitorResearchDeepImportInput = competitorResearchFields
+  .pick({
+    brandName: true,
+    homepageUrl: true,
+    pageTitle: true,
+    productSummary: true,
+    lifecycleStatus: true,
+    seedKeywords: true,
+    paymentProviders: true,
+    sources: true,
+  })
+  .extend({
+    primaryGroupId: competitorId,
+    localCapabilityId: competitorResearchLocalCapability,
+    sourceThreadUrl: sourceReferenceUrl,
+    detailedAnalysis: z.string().trim().min(20).max(48_000),
+    suggestedCategories: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+    evidenceGaps: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+  })
+  .strict()
+  .refine(
+    value =>
+      distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())),
+    {
+      message: 'Seed keywords must be unique',
+      path: ['seedKeywords'],
+    }
+  )
+  .refine(
+    value =>
+      distinctIds(
+        value.paymentProviders.map(item => item.provider.normalize('NFKC').toLowerCase())
+      ),
+    {
+      message: 'Payment providers must be unique',
+      path: ['paymentProviders'],
+    }
+  );
 export const competitorResearchRegenerateInput = z
   .object({
     rawInput: z.string().trim().min(20).max(12_000).optional(),
@@ -302,6 +343,7 @@ export type CompetitorResearchFilters = z.input<typeof competitorResearchFilters
 export type CompetitorResearchDraftInput = z.infer<typeof competitorResearchDraftInput>;
 export type CompetitorResearchStatus = z.infer<typeof competitorResearchStatus>;
 export type CompetitorResearchIntakeInput = z.infer<typeof competitorResearchIntakeInput>;
+export type CompetitorResearchDeepImportInput = z.infer<typeof competitorResearchDeepImportInput>;
 export type CompetitorResearchIntakeMode = z.infer<typeof competitorResearchIntakeMode>;
 export type CompetitorResearchLocalCapability = z.infer<typeof competitorResearchLocalCapability>;
 export type CompetitorPreResearchStage = z.infer<typeof competitorPreResearchStage>;
@@ -390,8 +432,8 @@ export interface CompetitorResearchAnalysis {
   researchMode?: CompetitorResearchIntakeMode;
   localCapabilityId?: CompetitorResearchLocalCapability | null;
   workflow?: CompetitorResearchAnalysisWorkflow;
-  provider: 'glm' | 'terra';
-  model: string;
+  provider: 'glm' | 'terra' | 'local_skill';
+  model: string | null;
   generatedAt: number;
   detailedAnalysis: string;
   suggestedCategories: string[];
@@ -460,6 +502,14 @@ export interface CompetitorResearchGeneratedIntakeResult {
   limitations: string[];
 }
 
+export interface CompetitorResearchDeepImportResult {
+  source: 'codex_local_handoff';
+  profileId: string;
+  savedAt: number;
+  replaced?: boolean;
+  limitations: string[];
+}
+
 export interface CompetitorResearchExistingIntakeResult {
   source: 'existing_research_profile';
   profileId: string;
@@ -469,6 +519,10 @@ export interface CompetitorResearchExistingIntakeResult {
 
 export type CompetitorResearchIntakeResult =
   | CompetitorResearchGeneratedIntakeResult
+  | CompetitorResearchExistingIntakeResult;
+
+export type CompetitorResearchDeepImportResultResponse =
+  | CompetitorResearchDeepImportResult
   | CompetitorResearchExistingIntakeResult;
 
 export const competitorResearchLocalCapabilityMetadata: Record<

@@ -70,6 +70,19 @@ const intakeInput = {
   ].join('\n'),
   lifecycleStatus: 'inbox' as const,
 };
+const localResearchReport = [
+  '# Market Overview & Definition',
+  'PromptSpace is positioned as a free browser-based developer-tool collection for makers who need fast, no-signup utilities.',
+  '',
+  '## Competitive Set Summary',
+  '- Direct alternatives should be verified against current pricing, product breadth, and acquisition channels.',
+  '',
+  '## Differentiation Opportunities',
+  '- Preserve privacy-first local execution and make category discovery easier without overstating unsupported market claims.',
+  '',
+  '## Evidence Gaps',
+  '- No checkout-flow evidence was supplied for every alternative.',
+].join('\n');
 const draftCompletion = (draft: object, status = 200): Response =>
   new Response(
     JSON.stringify(
@@ -686,10 +699,12 @@ test('MCP competitor read tools remain scoped and a local Skill import is explic
   });
   assert.deepEqual(importer?.inputSchema.required, [
     'workspaceId',
-    'rawInput',
+    'brandName',
+    'homepageUrl',
     'primaryGroupId',
     'localCapabilityId',
     'sourceThreadUrl',
+    'detailedAnalysis',
   ]);
   const groupsResult = await (
     await request(
@@ -751,10 +766,18 @@ test('MCP competitor read tools remain scoped and a local Skill import is explic
   }
   const importArguments = {
     workspaceId: 'workspace',
-    rawInput: `${intakeInput.rawInput}\nEvidence: https://tools.promptspace.in/pricing`,
+    brandName: 'PromptSpace',
+    homepageUrl: 'https://tools.promptspace.in/',
+    productSummary: 'A browser-based developer tool collection.',
     primaryGroupId,
     localCapabilityId: 'competitor-analysis',
     sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+    seedKeywords: ['free developer tools'],
+    paymentProviders: [],
+    sources: [{ url: 'https://tools.promptspace.in/pricing', kind: 'pricing' }],
+    detailedAnalysis: localResearchReport,
+    suggestedCategories: ['Developer tools'],
+    evidenceGaps: ['Need payment evidence.'],
   };
   const deniedImport = await (
     await request(
@@ -1353,6 +1376,108 @@ test('Codex deep research import requires its task link and preserves listed pub
     regeneratedReport.profiles[0].sourceThreadUrl,
     'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7'
   );
+});
+
+test('structured local Skill imports preserve the complete report without requesting a model', async () => {
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const requestsBeforeImport = glmRequests;
+  const response = await request(`${workspaceRoot}/research/import`, 'POST', {
+    brandName: 'PromptSpace',
+    homepageUrl: 'https://tools.promptspace.in/',
+    pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
+    productSummary: '面向开发者的免登录在线工具集合，核心价值是浏览器端的即时可用工具。',
+    lifecycleStatus: 'focus',
+    primaryGroupId,
+    localCapabilityId: 'competitor-analysis',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+    seedKeywords: ['free developer tools', 'JSON tools', 'AI utilities'],
+    paymentProviders: [
+      { provider: 'Stripe', status: 'evidence_only', evidence: '公开定价页待进一步核验。' },
+    ],
+    sources: [{ url: 'https://tools.promptspace.in/pricing', kind: 'pricing' }],
+    detailedAnalysis: localResearchReport,
+    suggestedCategories: ['Developer tools'],
+    evidenceGaps: ['需要继续核验实际支付和竞品定价页面。'],
+  });
+  assert.equal(response.status, 201);
+  const created = (await response.json()).data;
+  assert.equal(created.source, 'codex_local_handoff');
+  assert.equal(created.replaced, undefined);
+  assert.equal(glmRequests, requestsBeforeImport);
+
+  const report = (await (await request(`${workspaceRoot}/research`)).json()).data;
+  const profile = report.profiles[0];
+  assert.equal(profile.rawInput, localResearchReport);
+  assert.equal(profile.analysis.provider, 'local_skill');
+  assert.equal(profile.analysis.model, null);
+  assert.equal(profile.analysis.workflow, 'local-skill-evidence-import-v1');
+  assert.equal(profile.analysis.detailedAnalysis, localResearchReport);
+  assert.deepEqual(profile.analysis.evidenceGaps, ['需要继续核验实际支付和竞品定价页面。']);
+  assert.deepEqual(
+    profile.sources.map((source: { url: string; kind: string }) => [source.url, source.kind]),
+    [
+      ['https://tools.promptspace.in/', 'landing'],
+      ['https://tools.promptspace.in/pricing', 'pricing'],
+    ]
+  );
+  assert.equal(
+    (await request(`${workspaceRoot}/research/${created.profileId}/regenerate`, 'POST')).status,
+    409
+  );
+  assert.equal(glmRequests, requestsBeforeImport);
+  assert.equal(
+    (
+      await database
+        .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+        .bind('workspace')
+        .first<{ count: number }>()
+    )?.count,
+    0
+  );
+});
+
+test('local Skill reports can be replaced without a model request', async () => {
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const created = await request(`${workspaceRoot}/research/import`, 'POST', {
+    brandName: 'PromptSpace',
+    homepageUrl: 'https://tools.promptspace.in/',
+    productSummary: '初始本机深度研究。',
+    lifecycleStatus: 'focus',
+    primaryGroupId,
+    localCapabilityId: 'competitor-analysis',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+    seedKeywords: ['free developer tools'],
+    paymentProviders: [],
+    sources: [{ url: 'https://tools.promptspace.in/pricing', kind: 'pricing' }],
+    detailedAnalysis: localResearchReport,
+    suggestedCategories: ['Developer tools'],
+    evidenceGaps: ['Need payment evidence.'],
+  });
+  const profileId = (await created.json()).data.profileId as string;
+  const requestsBeforeReplacement = glmRequests;
+  const replacementReport = `${localResearchReport}\n\n## Follow-up\n- Updated after a fresh local Skill run.`;
+  const replacement = await request(`${workspaceRoot}/research/${profileId}/import`, 'PUT', {
+    brandName: 'PromptSpace',
+    homepageUrl: 'https://tools.promptspace.in/',
+    productSummary: '更新后的本机深度研究仍保留完整证据和结论。',
+    lifecycleStatus: 'watch',
+    primaryGroupId,
+    localCapabilityId: 'competitor-analysis',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+    seedKeywords: ['free developer tools'],
+    paymentProviders: [],
+    sources: [{ url: 'https://tools.promptspace.in/pricing', kind: 'pricing' }],
+    detailedAnalysis: replacementReport,
+    suggestedCategories: ['Developer tools'],
+    evidenceGaps: ['Need payment evidence.'],
+  });
+  assert.equal(replacement.status, 200);
+  assert.equal((await replacement.json()).data.replaced, true);
+  const replacedProfile = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(replacedProfile.lifecycleStatus, 'watch');
+  assert.equal(replacedProfile.rawInput, replacementReport);
+  assert.equal(replacedProfile.analysis.detailedAnalysis, replacementReport);
+  assert.equal(glmRequests, requestsBeforeReplacement);
 });
 
 test('AI research draft falls back to the configured Terra bridge after GLM fails', async () => {
