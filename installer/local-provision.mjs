@@ -14,6 +14,7 @@
  * TRAKS_VALIDATE_ONLY=1 checks local artifacts without touching Cloudflare.
  */
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -466,6 +467,16 @@ async function putSecret(worker, name, text) {
 }
 
 async function smoke(apiUrl, collectUrl) {
+  const probeWithCurl = (url, expected) => {
+    const result = spawnSync(
+      'curl',
+      ['--fail', '--silent', '--show-error', '--max-time', '20', url],
+      {
+        encoding: 'utf8',
+      }
+    );
+    return result.status === 0 && result.stdout.includes(expected);
+  };
   const probe = async (url, pathname, expected) => {
     for (let attempt = 1; attempt <= 9; attempt++) {
       try {
@@ -475,6 +486,10 @@ async function smoke(apiUrl, collectUrl) {
         process.stdout.write(`    retry ${attempt}: ${pathname} HTTP ${response.status}\n`);
       } catch (error) {
         process.stdout.write(`    retry ${attempt}: ${pathname} ${error.message}\n`);
+      }
+      if (probeWithCurl(`${url}${pathname}`, expected)) {
+        process.stdout.write(`    ${pathname} passed via curl fallback\n`);
+        return;
       }
       await sleep(10000);
     }
