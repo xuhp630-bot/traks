@@ -41,8 +41,36 @@ if (!['patch', 'minor', 'major'].includes(level)) {
   process.exit(1);
 }
 
+function releaseEnvironment() {
+  const environment = { ...process.env };
+  let removed = 0;
+  for (const key of [
+    'ALL_PROXY',
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'all_proxy',
+    'https_proxy',
+    'http_proxy',
+  ]) {
+    if (/^socks\d?h?:/i.test(environment[key] ?? '')) {
+      delete environment[key];
+      removed++;
+    }
+  }
+  if (removed) {
+    console.warn(`Ignoring ${removed} unsupported SOCKS proxy setting(s) for release tooling.`);
+  }
+  return environment;
+}
+
+const RELEASE_ENVIRONMENT = releaseEnvironment();
+
 function run(cmd, args) {
-  const res = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
+  const res = spawnSync(cmd, args, {
+    cwd: ROOT,
+    env: RELEASE_ENVIRONMENT,
+    stdio: 'inherit',
+  });
   if (res.status !== 0) {
     console.error(`✗ ${cmd} ${args.join(' ')} failed`);
     process.exit(1);
