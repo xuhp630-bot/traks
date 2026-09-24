@@ -22,6 +22,17 @@ function keychainSecret(name) {
   }
 }
 
+function optionalKeychainSecret(name) {
+  try {
+    return execFileSync('security', ['find-generic-password', '-s', SERVICE, '-a', name, '-w'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function refreshedWranglerEnvironment() {
   const environment = { ...process.env };
   for (const key of [
@@ -37,14 +48,19 @@ function refreshedWranglerEnvironment() {
   return environment;
 }
 
-const refresh = spawnSync('npx', ['wrangler', 'whoami'], {
-  cwd: ROOT,
-  env: refreshedWranglerEnvironment(),
-  stdio: 'ignore',
-});
-if (refresh.status !== 0) {
-  console.error('Wrangler OAuth could not be refreshed. Run `npx wrangler login` and retry.');
-  process.exit(1);
+const apiToken = optionalKeychainSecret('CLOUDFLARE_API_TOKEN');
+if (!apiToken) {
+  const refresh = spawnSync('npx', ['wrangler', 'whoami'], {
+    cwd: ROOT,
+    env: refreshedWranglerEnvironment(),
+    stdio: 'ignore',
+  });
+  if (refresh.status !== 0) {
+    console.error(
+      'No Cloudflare API token in the macOS Keychain and Wrangler OAuth could not be refreshed. Add CLOUDFLARE_API_TOKEN to com.traks.release or run `npx wrangler login` and retry.'
+    );
+    process.exit(1);
+  }
 }
 
 const deploy = spawnSync(process.execPath, ['installer/local-provision.mjs'], {
@@ -53,6 +69,7 @@ const deploy = spawnSync(process.execPath, ['installer/local-provision.mjs'], {
     ...process.env,
     CLOUDFLARE_ACCOUNT_ID: keychainSecret('CLOUDFLARE_ACCOUNT_ID'),
     TRAKS_CATALOG_TOKEN: keychainSecret('CATALOG_TOKEN'),
+    ...(apiToken ? { CLOUDFLARE_API_TOKEN: apiToken } : {}),
   },
   stdio: 'inherit',
 });

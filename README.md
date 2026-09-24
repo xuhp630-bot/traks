@@ -352,9 +352,10 @@ command output. This opt-in path does not apply to development or provisioning
 secrets.
 
 The same Keychain entries can deploy the existing `traks-selfhost` instance
-with `yarn traks:selfhost:keychain`. That command refreshes the local Wrangler
-OAuth session before applying migrations and updating the Workers; it never
-writes the release token to disk.
+with `yarn traks:selfhost:keychain`. If `CLOUDFLARE_API_TOKEN` is stored in the
+same Keychain service, the command uses it directly for migrations and Worker
+updates. Otherwise it refreshes the local Wrangler OAuth session. Neither path
+writes a release credential to disk.
 
 ## Contributing
 
