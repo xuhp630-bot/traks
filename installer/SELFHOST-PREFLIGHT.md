@@ -155,6 +155,21 @@ regenerate it by rerunning the idempotent `yarn traks:selfhost` command only
 while the instance remains unclaimed. If needed, rotate or replace the
 `CLAIM_TOKEN` Worker secret before sharing a claim URL.
 
+### 2026-09-24 competitor-research GLM connection check
+
+The optional competitor-research draft path was connected to an authorized GLM
+Coding-compatible HTTPS endpoint through Worker secrets. The API key itself is
+not stored in this repository or documented here. The generic Z.ai endpoint
+rejected the available credential for lack of an API resource package, while a
+minimal GLM Coding request and the production draft flow both returned valid
+`glm-5.3` JSON.
+
+Production verification used synthetic input only. It generated an unsaved,
+explicitly marked-as-unverified draft, created no competitor research profile,
+and did not create a monitor. Terra remains an optional fallback and must use
+an authorized public HTTPS OpenAI-compatible bridge; local subscription routes
+and browser login state must not be exposed to the Worker.
+
 ### 2026-09-10 earlier checkpoint
 
 At 21:49 Asia/Shanghai, the first local provisioning run stopped before
