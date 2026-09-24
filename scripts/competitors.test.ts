@@ -999,7 +999,7 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal('modelMetadata' in result.data.draft, false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
-  assert.equal(calls[0].body.max_tokens, 4200);
+  assert.equal(calls[0].body.max_tokens, 6000);
   assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
   assert.match(JSON.stringify(calls[0].body.messages), /competitor-analysis/);
   assert.match(JSON.stringify(calls[0].body.messages), /single most important/);
@@ -1041,20 +1041,67 @@ test('AI research intake accepts GLM-compatible JSON response variants', async (
   }
 });
 
-test('AI research intake classifies an upstream length stop without saving a partial response', async () => {
+test('AI research intake retries a truncated GLM response with compact JSON constraints', async () => {
+  const calls: Record<string, unknown>[] = [];
   const result = await generateCompetitorResearchIntake(
     { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
     intakeInput,
     {
-      fetcher: (async () =>
-        completionPayload({
+      fetcher: (async (_url, init) => {
+        calls.push(JSON.parse(String(init?.body)));
+        if (calls.length === 1)
+          return completionPayload({
+            choices: [{ finish_reason: 'length', message: { content: '{"brandName":"BrandGene"' } }],
+          });
+        return draftCompletion({
+          brandName: 'PromptSpace',
+          pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
+          productSummary: '面向开发者的免费在线工具集合，页面强调免注册的浏览器内工具使用。',
+          categoryConclusion: '免费在线开发者工具集合。',
+          positioningEvidence: '标题、H1 与工具分类说明其提供免注册的浏览器工具。',
+          customerTasks: '用户可处理 JSON、编码、文本和图片相关任务。',
+          keywordRationale: '关键词来自 developer tools、JSON、AI Tools 和 Image。',
+          competitionPerspective: '粘贴资料没有直接竞品证据，无法判断竞争集合。',
+          paymentConclusion: '未提供价格、结账或支付服务商证据。',
+          suggestedCategories: ['开发者工具站'],
+          seedKeywords: ['free developer tools', 'JSON tools'],
+          paymentProviders: [],
+          evidenceGaps: ['需要补充定价或结账页证据。'],
+        });
+      }) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.data.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'truncated_response' },
+    { provider: 'glm', model: 'glm-5.3', outcome: 'succeeded' },
+  ]);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].max_tokens, 6000);
+  assert.equal(calls[1].max_tokens, 3600);
+  assert.match(JSON.stringify(calls[1].messages), /RETRY_OUTPUT_CONSTRAINTS/);
+});
+
+test('AI research intake rejects two truncated responses without returning partial data', async () => {
+  let calls = 0;
+  const result = await generateCompetitorResearchIntake(
+    { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+    intakeInput,
+    {
+      fetcher: (async () => {
+        calls += 1;
+        return completionPayload({
           choices: [{ finish_reason: 'length', message: { content: '{"brandName":"BrandGene"' } }],
-        })) as typeof fetch,
+        });
+      }) as typeof fetch,
     }
   );
   assert.equal(result.ok, false);
   if (result.ok) return;
+  assert.equal(calls, 2);
   assert.deepEqual(result.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'truncated_response' },
     { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'truncated_response' },
     { provider: 'terra', model: 'unconfigured', outcome: 'skipped', reason: 'not_configured' },
   ]);
