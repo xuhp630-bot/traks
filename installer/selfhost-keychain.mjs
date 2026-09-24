@@ -63,6 +63,19 @@ if (!apiToken) {
   }
 }
 
+const releaseBuild = spawnSync('yarn', ['traks:build'], {
+  cwd: ROOT,
+  env: {
+    ...refreshedWranglerEnvironment(),
+    ...(apiToken ? { CLOUDFLARE_API_TOKEN: apiToken } : {}),
+  },
+  stdio: 'inherit',
+});
+if (releaseBuild.status !== 0) {
+  console.error('Release build failed; the existing self-hosted instance was not deployed.');
+  process.exit(releaseBuild.status ?? 1);
+}
+
 const deploy = spawnSync(process.execPath, ['installer/local-provision.mjs'], {
   cwd: ROOT,
   env: {

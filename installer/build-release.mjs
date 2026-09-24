@@ -17,8 +17,23 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'installer/dist');
 
+function childEnvironment() {
+  const environment = { ...process.env };
+  for (const key of [
+    'ALL_PROXY',
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'all_proxy',
+    'https_proxy',
+    'http_proxy',
+  ]) {
+    if (/^socks\d?h?:/i.test(environment[key] ?? '')) delete environment[key];
+  }
+  return environment;
+}
+
 function run(cmd, args, cwd = ROOT) {
-  const res = spawnSync(cmd, args, { cwd, stdio: 'inherit' });
+  const res = spawnSync(cmd, args, { cwd, env: childEnvironment(), stdio: 'inherit' });
   if (res.status !== 0) {
     console.error(`✗ ${cmd} ${args.join(' ')} failed`);
     process.exit(1);
