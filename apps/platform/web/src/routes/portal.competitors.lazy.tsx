@@ -887,9 +887,11 @@ function detailedAnalysisSections(value: string): ResearchTextSection[] {
 function ResearchTextSections({
   sections,
   emptyLabel,
+  variant = 'default',
 }: {
   sections: ResearchTextSection[];
   emptyLabel: string;
+  variant?: 'default' | 'source';
 }): ReactElement {
   if (!sections.length) return <p className="text-xs text-[#6F6D7A]">{emptyLabel}</p>;
   return (
@@ -897,10 +899,14 @@ function ResearchTextSections({
       {sections.map((section, index) => (
         <section
           key={`${section.title ?? 'text'}-${index}`}
-          className="rounded-lg border border-[#E3E2E6] bg-white px-3 py-2"
+          className={`rounded-lg border px-3 py-2 ${
+            variant === 'source' ? 'border-[#C9D9E6] bg-[#F4F8FB]' : 'border-[#E3E2E6] bg-white'
+          }`}
         >
           {section.title && (
-            <h4 className="text-xs font-semibold text-[#3D3B4F]">{section.title}</h4>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-[#3D3B4F]">
+              {section.title}
+            </h4>
           )}
           <p
             className={`${section.title ? 'mt-1' : ''} whitespace-pre-wrap break-words text-xs leading-5 text-[#555163]`}
@@ -1510,7 +1516,9 @@ function ResearchLibrary({
       }),
     onSuccess: result => {
       setRawInput('');
+      setFilter(intakeStatus);
       setPage(1);
+      setSelectedProfileId(result.data.profileId);
       setNotice(`已由 ${result.data.model} 分析并保存完整预调研记录，尚未创建监控。`);
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
@@ -1598,6 +1606,8 @@ function ResearchLibrary({
     }
   };
   const profiles = research.data?.data.profiles ?? [];
+  const rawInputPreview = rawInput.trim() ? rawInputSections(rawInput) : [];
+  const labeledRawInputCount = rawInputPreview.filter(section => section.title).length;
   const selectedProfile =
     profiles.find(profile => profile.id === selectedProfileId) ?? profiles[0] ?? null;
   const canManage = research.data?.data.canManage ?? false;
@@ -1635,14 +1645,19 @@ function ResearchLibrary({
         </label>
       </div>
       {canManage && (
-        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.45fr)]">
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.42fr)]">
           <form
             onSubmit={event => void saveIntake(event)}
-            className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4"
+            className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 sm:p-5"
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-semibold text-[#3D3B4F]">粘贴网站资料并分析保存</h3>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#537695]">
+                  Step 1 · 输入资料
+                </p>
+                <h3 className="mt-1 font-semibold text-[#3D3B4F]">
+                  粘贴网站资料，生成并保存预调研
+                </h3>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
                   粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM
                   仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。
@@ -1669,7 +1684,7 @@ function ResearchLibrary({
             <label className="mt-4 block text-xs">
               网站资料
               <textarea
-                className={`${controlClass} mt-2 min-h-64 py-3 font-mono text-xs leading-5`}
+                className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
                 value={rawInput}
                 onChange={event => setRawInput(event.target.value)}
                 disabled={intakeMutation.isPending}
@@ -1680,6 +1695,23 @@ function ResearchLibrary({
                 }
               />
             </label>
+            {rawInputPreview.length > 0 && (
+              <aside className="mt-3 rounded-lg border border-[#C9D9E6] bg-white/75 p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-xs font-semibold text-[#3D3B4F]">输入预览</p>
+                  <p className="text-[11px] text-[#6F6D7A]">
+                    已识别 {labeledRawInputCount} 个标签字段
+                  </p>
+                </div>
+                <div className="mt-2 max-h-52 overflow-auto pr-1">
+                  <ResearchTextSections
+                    sections={rawInputPreview}
+                    emptyLabel="尚未识别可展示的输入字段。"
+                    variant="source"
+                  />
+                </div>
+              </aside>
+            )}
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
               必须包含公开 HTTPS
               URL。模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。
@@ -1692,8 +1724,11 @@ function ResearchLibrary({
           </form>
           <form
             onSubmit={event => void createCategory(event)}
-            className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4"
+            className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4 sm:p-5"
           >
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6F6D7A]">
+              可选整理
+            </p>
             <h3 className="font-semibold text-[#3D3B4F]">人工分类</h3>
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
               新建分类后，可在每条研究档案的“手动划分与关联”中勾选；不会自动采纳模型建议。
@@ -1720,6 +1755,14 @@ function ResearchLibrary({
           </form>
         </div>
       )}
+      {notice && (
+        <p
+          role="status"
+          className="mt-4 rounded-xl border border-[#B8DEC9] bg-[#F2FBF6] px-4 py-3 text-sm text-[#356848]"
+        >
+          {notice}
+        </p>
+      )}
       {research.error && (
         <div className="mt-4">
           <ErrorNotice error={research.error} />
@@ -1738,15 +1781,22 @@ function ResearchLibrary({
           正在读取研究档案…
         </p>
       ) : (
-        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(18rem,0.7fr)_minmax(0,1.3fr)]">
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(18rem,0.58fr)_minmax(0,1.42fr)]">
           <section
-            className="rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-3"
+            className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-3 xl:sticky xl:top-5"
             aria-label="已保存分析结果"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-2 px-1">
-              <h3 className="text-sm font-semibold text-[#3D3B4F]">已保存分析结果</h3>
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6F6D7A]">
+                  Step 2 · 结果列表
+                </p>
+                <h3 className="mt-1 text-sm font-semibold text-[#3D3B4F]">已保存分析结果</h3>
+              </div>
               {pagination && (
-                <span className="text-xs text-[#6F6D7A]">共 {pagination.total} 条</span>
+                <span className="rounded-full bg-white px-2 py-1 text-xs text-[#6F6D7A]">
+                  {pagination.total} 条
+                </span>
               )}
             </div>
             {!profiles.length && (
@@ -1755,7 +1805,7 @@ function ResearchLibrary({
               </p>
             )}
             <ul className="mt-3 space-y-2" aria-label="研究结果列表">
-              {profiles.map(profile => {
+              {profiles.map((profile, index) => {
                 const selected = profile.id === selectedProfile?.id;
                 return (
                   <li key={`${profile.id}:${profile.updatedAt}`}>
@@ -1765,13 +1815,21 @@ function ResearchLibrary({
                       onClick={() => setSelectedProfileId(profile.id)}
                       className={`w-full rounded-lg border p-3 text-left transition ${
                         selected
-                          ? 'border-[#537695] bg-[#F4F8FB] shadow-sm'
+                          ? 'border-[#537695] bg-[#F4F8FB] shadow-sm ring-1 ring-[#C9D9E6]'
                           : 'border-[#E3E2E6] bg-white hover:border-[#9BB7CD]'
                       }`}
                     >
                       <span className="flex items-start justify-between gap-3">
-                        <span className="min-w-0 break-words text-sm font-semibold text-[#3D3B4F]">
-                          {profile.brandName}
+                        <span className="flex min-w-0 items-start gap-2">
+                          <span className="mt-0.5 shrink-0 text-[11px] font-semibold text-[#9B99A6]">
+                            {String(((pagination?.page ?? 1) - 1) * pageSize + index + 1).padStart(
+                              2,
+                              '0'
+                            )}
+                          </span>
+                          <span className="min-w-0 break-words text-sm font-semibold text-[#3D3B4F]">
+                            {profile.brandName}
+                          </span>
                         </span>
                         <span className="shrink-0 rounded-full bg-[#F9F8F6] px-2 py-0.5 text-[11px] text-[#6F6D7A]">
                           {researchStatusLabels[profile.lifecycleStatus]}
@@ -1785,9 +1843,10 @@ function ResearchLibrary({
                           {profile.productSummary}
                         </span>
                       )}
-                      <span className="mt-2 block text-[11px] text-[#6F6D7A]">
-                        {profile.seedKeywords.length} 个种子词 · {profile.paymentProviders.length}{' '}
-                        条支付证据
+                      <span className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[#6F6D7A]">
+                        <span>{profile.seedKeywords.length} 个种子词</span>
+                        <span>{profile.paymentProviders.length} 条支付证据</span>
+                        <span>{formatTime(profile.updatedAt)}</span>
                       </span>
                     </button>
                   </li>
@@ -1875,192 +1934,188 @@ function ResearchLibrary({
               </p>
             )}
             {canManage ? (
-              <form
-                onSubmit={event => void create(event)}
-                className="h-fit rounded-xl bg-[#F9F8F6] p-4"
-              >
-                <h3 className="font-semibold">保存研究结论</h3>
+              <details className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4">
+                <summary className="cursor-pointer text-sm font-semibold text-[#3D3B4F]">
+                  手动补充研究档案
+                </summary>
                 <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-                  可先用手动输入生成待核验草稿。只发送本表的
+                  仅在无法粘贴完整资料时使用。可先生成待核验草稿；只发送本表的
                   URL、标题、摘要和种子词；不会读取目标站、插件数据、Cookie 或 Codex
                   任务，也不会自动保存或创建监控。
                 </p>
-                {notice && (
-                  <p role="status" className="mt-3 text-sm text-[#537695]">
-                    {notice}
-                  </p>
-                )}
-                <Button
-                  type="button"
-                  className="mt-3"
-                  variant="outline"
-                  disabled={draftMutation.isPending}
-                  onClick={() => void generateDraft()}
-                >
-                  <Sparkles size={16} className="mr-2" />
-                  {draftMutation.isPending ? '正在生成草稿…' : '生成待核验草稿'}
-                </Button>
-                {draftMutation.error && <ErrorNotice error={draftMutation.error} />}
-                {generatedDraft && (
-                  <aside className="mt-4 rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 text-sm">
-                    <p className="font-medium text-[#3D3B4F]">
-                      {generatedDraft.provider === 'glm' ? 'GLM 优先模型' : 'Terra 后备模型'} ·{' '}
-                      {generatedDraft.model}
-                    </p>
-                    <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-[#555163]">
-                      {generatedDraft.draft.productSummary ?? '未生成产品摘要'}
-                    </p>
-                    {generatedDraft.draft.seedKeywords.length > 0 && (
-                      <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                        建议种子词：{generatedDraft.draft.seedKeywords.join(' · ')}
-                      </p>
-                    )}
-                    {generatedDraft.draft.paymentProviders.length > 0 && (
-                      <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                        待核验支付候选：
-                        {generatedDraft.draft.paymentProviders
-                          .map(item => item.provider)
-                          .join(' · ')}
-                      </p>
-                    )}
-                    {generatedDraft.draft.evidenceGaps.length > 0 && (
-                      <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                        待补证据：{generatedDraft.draft.evidenceGaps.join(' · ')}
-                      </p>
-                    )}
-                    <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
-                      {generatedDraft.limitations[1]}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button type="button" size="sm" onClick={applyDraft}>
-                        应用到表单
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setGeneratedDraft(null)}
-                      >
-                        丢弃草稿
-                      </Button>
-                    </div>
-                  </aside>
-                )}
-                <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
-                  <label className="text-xs">
-                    品牌 / 网站名称
-                    <Input
-                      className="mt-2 min-h-11"
-                      value={brandName}
-                      onChange={event => setBrandName(event.target.value)}
-                      required
-                      maxLength={100}
-                      placeholder="例如 OpenSourceGen"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    首页公开 HTTPS URL
-                    <Input
-                      className="mt-2 min-h-11"
-                      type="url"
-                      value={homepageUrl}
-                      onChange={event => setHomepageUrl(event.target.value)}
-                      required
-                      maxLength={500}
-                      placeholder="https://example.com/"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    页面标题 / 已知文案（可选）
-                    <Input
-                      className="mt-2 min-h-11"
-                      value={pageTitle}
-                      onChange={event => setPageTitle(event.target.value)}
-                      maxLength={200}
-                      placeholder="例如 AI Image Generator for Creators"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    初始状态
-                    <select
-                      className={`${controlClass} mt-2`}
-                      value={newStatus}
-                      onChange={event =>
-                        setNewStatus(event.target.value as CompetitorResearchStatus)
-                      }
-                    >
-                      {Object.entries(researchStatusLabels).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-xs">
-                    产品 / 品类结论
-                    <textarea
-                      className={`${controlClass} mt-2 min-h-22 py-2`}
-                      value={summary}
-                      onChange={event => setSummary(event.target.value)}
-                      maxLength={4000}
-                      placeholder="例如：开源模型聚合的图片与视频生成工具"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    种子词（逗号或换行分隔）
-                    <textarea
-                      className={`${controlClass} mt-2 min-h-20 py-2`}
-                      value={keywords}
-                      onChange={event => setKeywords(event.target.value)}
-                      maxLength={5000}
-                      placeholder="AI image generator, AI video generator"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    支付网关（`名称:状态`，状态为 confirmed / evidence_only / disabled / unknown）
-                    <Input
-                      className="mt-2 min-h-11"
-                      value={payments}
-                      onChange={event => setPayments(event.target.value)}
-                      maxLength={1200}
-                      placeholder="Stripe:confirmed, PayPal:evidence_only"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    证据来源 URL（逗号或换行分隔）
-                    <textarea
-                      className={`${controlClass} mt-2 min-h-20 py-2`}
-                      value={sources}
-                      onChange={event => setSources(event.target.value)}
-                      maxLength={5000}
-                      placeholder="https://example.com/pricing"
-                    />
-                  </label>
-                  <label className="text-xs">
-                    来源任务 / 备注链接（可选）
-                    <Input
-                      className="mt-2 min-h-11"
-                      value={threadUrl}
-                      onChange={event => setThreadUrl(event.target.value)}
-                      maxLength={2048}
-                      placeholder="codex://threads/..."
-                    />
-                  </label>
-                  <label className="text-xs">
-                    研究备注（可选）
-                    <textarea
-                      className={`${controlClass} mt-2 min-h-20 py-2`}
-                      value={notes}
-                      onChange={event => setNotes(event.target.value)}
-                      maxLength={4000}
-                    />
-                  </label>
-                  <Button type="submit">
-                    <Plus size={16} className="mr-2" />
-                    保存研究档案
+                <form onSubmit={event => void create(event)}>
+                  <Button
+                    type="button"
+                    className="mt-3"
+                    variant="outline"
+                    disabled={draftMutation.isPending}
+                    onClick={() => void generateDraft()}
+                  >
+                    <Sparkles size={16} className="mr-2" />
+                    {draftMutation.isPending ? '正在生成草稿…' : '生成待核验草稿'}
                   </Button>
-                </fieldset>
-              </form>
+                  {draftMutation.error && <ErrorNotice error={draftMutation.error} />}
+                  {generatedDraft && (
+                    <aside className="mt-4 rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 text-sm">
+                      <p className="font-medium text-[#3D3B4F]">
+                        {generatedDraft.provider === 'glm' ? 'GLM 优先模型' : 'Terra 后备模型'} ·{' '}
+                        {generatedDraft.model}
+                      </p>
+                      <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-[#555163]">
+                        {generatedDraft.draft.productSummary ?? '未生成产品摘要'}
+                      </p>
+                      {generatedDraft.draft.seedKeywords.length > 0 && (
+                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                          建议种子词：{generatedDraft.draft.seedKeywords.join(' · ')}
+                        </p>
+                      )}
+                      {generatedDraft.draft.paymentProviders.length > 0 && (
+                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                          待核验支付候选：
+                          {generatedDraft.draft.paymentProviders
+                            .map(item => item.provider)
+                            .join(' · ')}
+                        </p>
+                      )}
+                      {generatedDraft.draft.evidenceGaps.length > 0 && (
+                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
+                          待补证据：{generatedDraft.draft.evidenceGaps.join(' · ')}
+                        </p>
+                      )}
+                      <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
+                        {generatedDraft.limitations[1]}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button type="button" size="sm" onClick={applyDraft}>
+                          应用到表单
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setGeneratedDraft(null)}
+                        >
+                          丢弃草稿
+                        </Button>
+                      </div>
+                    </aside>
+                  )}
+                  <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
+                    <label className="text-xs">
+                      品牌 / 网站名称
+                      <Input
+                        className="mt-2 min-h-11"
+                        value={brandName}
+                        onChange={event => setBrandName(event.target.value)}
+                        required
+                        maxLength={100}
+                        placeholder="例如 OpenSourceGen"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      首页公开 HTTPS URL
+                      <Input
+                        className="mt-2 min-h-11"
+                        type="url"
+                        value={homepageUrl}
+                        onChange={event => setHomepageUrl(event.target.value)}
+                        required
+                        maxLength={500}
+                        placeholder="https://example.com/"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      页面标题 / 已知文案（可选）
+                      <Input
+                        className="mt-2 min-h-11"
+                        value={pageTitle}
+                        onChange={event => setPageTitle(event.target.value)}
+                        maxLength={200}
+                        placeholder="例如 AI Image Generator for Creators"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      初始状态
+                      <select
+                        className={`${controlClass} mt-2`}
+                        value={newStatus}
+                        onChange={event =>
+                          setNewStatus(event.target.value as CompetitorResearchStatus)
+                        }
+                      >
+                        {Object.entries(researchStatusLabels).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs">
+                      产品 / 品类结论
+                      <textarea
+                        className={`${controlClass} mt-2 min-h-22 py-2`}
+                        value={summary}
+                        onChange={event => setSummary(event.target.value)}
+                        maxLength={4000}
+                        placeholder="例如：开源模型聚合的图片与视频生成工具"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      种子词（逗号或换行分隔）
+                      <textarea
+                        className={`${controlClass} mt-2 min-h-20 py-2`}
+                        value={keywords}
+                        onChange={event => setKeywords(event.target.value)}
+                        maxLength={5000}
+                        placeholder="AI image generator, AI video generator"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      支付网关（`名称:状态`，状态为 confirmed / evidence_only / disabled / unknown）
+                      <Input
+                        className="mt-2 min-h-11"
+                        value={payments}
+                        onChange={event => setPayments(event.target.value)}
+                        maxLength={1200}
+                        placeholder="Stripe:confirmed, PayPal:evidence_only"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      证据来源 URL（逗号或换行分隔）
+                      <textarea
+                        className={`${controlClass} mt-2 min-h-20 py-2`}
+                        value={sources}
+                        onChange={event => setSources(event.target.value)}
+                        maxLength={5000}
+                        placeholder="https://example.com/pricing"
+                      />
+                    </label>
+                    <label className="text-xs">
+                      来源任务 / 备注链接（可选）
+                      <Input
+                        className="mt-2 min-h-11"
+                        value={threadUrl}
+                        onChange={event => setThreadUrl(event.target.value)}
+                        maxLength={2048}
+                        placeholder="codex://threads/..."
+                      />
+                    </label>
+                    <label className="text-xs">
+                      研究备注（可选）
+                      <textarea
+                        className={`${controlClass} mt-2 min-h-20 py-2`}
+                        value={notes}
+                        onChange={event => setNotes(event.target.value)}
+                        maxLength={4000}
+                      />
+                    </label>
+                    <Button type="submit">
+                      <Plus size={16} className="mr-2" />
+                      保存研究档案
+                    </Button>
+                  </fieldset>
+                </form>
+              </details>
             ) : (
               <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
                 当前账号只读，可查看研究结论和关联关系。
@@ -2177,38 +2232,63 @@ function ResearchProfileCard({
           备注：{profile.notes}
         </p>
       )}
-      {profile.analysis && (
-        <details open className="mt-4 rounded-lg border border-[#C9D9E6] bg-[#F4F8FB] p-3">
-          <summary className="cursor-pointer text-sm font-medium">查看完整预调研</summary>
-          <p className="mt-3 text-xs text-[#6F6D7A]">
-            {profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · {profile.analysis.model} ·{' '}
-            {formatTime(profile.analysis.generatedAt)}
-          </p>
-          <div className="mt-3">
-            <ResearchTextSections
-              sections={detailedAnalysisSections(profile.analysis.detailedAnalysis)}
-              emptyLabel="未保存详细分析。"
-            />
+      {(profile.analysis || profile.rawInput) && (
+        <section className="mt-5 border-t border-[#E3E2E6] pt-5" aria-label="预调研输入与结果">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#537695]">
+                输入 → 结果
+              </p>
+              <h4 className="mt-1 text-sm font-semibold text-[#3D3B4F]">预调研记录</h4>
+            </div>
+            {profile.analysis && (
+              <p className="text-xs text-[#6F6D7A]">
+                {profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · {profile.analysis.model} ·{' '}
+                {formatTime(profile.analysis.generatedAt)}
+              </p>
+            )}
           </div>
-          <ResearchChips
-            label="建议分类（待人工确认）"
-            values={profile.analysis.suggestedCategories}
-          />
-          <ResearchChips label="待补证据" values={profile.analysis.evidenceGaps} />
-          {profile.rawInput && (
-            <details open className="mt-3 rounded border border-[#E3E2E6] bg-white p-3">
-              <summary className="cursor-pointer text-xs font-medium">
-                已保存的原始输入（按标签分段）
-              </summary>
-              <div className="mt-3 max-h-96 overflow-auto pr-1">
+          <div className="mt-3 grid gap-3 xl:grid-cols-2">
+            <section className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-3">
+              <h5 className="text-sm font-semibold text-[#3D3B4F]">输入资料</h5>
+              <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
+                已保存的公开资料，按原始标签分段展示。
+              </p>
+              <div className="mt-3 max-h-[34rem] overflow-auto pr-1">
                 <ResearchTextSections
-                  sections={rawInputSections(profile.rawInput)}
+                  sections={profile.rawInput ? rawInputSections(profile.rawInput) : []}
                   emptyLabel="未保存原始输入。"
+                  variant="source"
                 />
               </div>
-            </details>
-          )}
-        </details>
+            </section>
+            <section className="rounded-xl border border-[#C9D9E6] bg-white p-3">
+              <h5 className="text-sm font-semibold text-[#3D3B4F]">分析结果</h5>
+              <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
+                模型结论仅基于左侧输入，分类和支付判断仍需人工核验。
+              </p>
+              <div className="mt-3 max-h-[34rem] overflow-auto pr-1">
+                <ResearchTextSections
+                  sections={
+                    profile.analysis
+                      ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
+                      : []
+                  }
+                  emptyLabel="未保存详细分析。"
+                />
+              </div>
+              {profile.analysis && (
+                <>
+                  <ResearchChips
+                    label="建议分类（待人工确认）"
+                    values={profile.analysis.suggestedCategories}
+                  />
+                  <ResearchChips label="待补证据" values={profile.analysis.evidenceGaps} />
+                </>
+              )}
+            </section>
+          </div>
+        </section>
       )}
       {canManage && (
         <details className="mt-4 rounded-lg bg-[#F9F8F6] p-3">
