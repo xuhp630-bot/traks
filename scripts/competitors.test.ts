@@ -1076,6 +1076,91 @@ test('pasted research intake saves source and detailed analysis without creating
   );
 });
 
+test('research profiles edit saved input, regenerate derived conclusions, and delete without deleting monitors', async () => {
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const categoryId = await category('AI tools');
+  const monitorId = await independent({ categoryId, cadence: 'manual' });
+  const created = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+  });
+  assert.equal(created.status, 201);
+  const profileId = (await created.json()).data.profileId as string;
+  for (const [suffix, ids] of [
+    ['categories', [categoryId]],
+    ['sites', ['site']],
+    ['monitors', [monitorId]],
+  ] as const)
+    assert.equal(
+      (await request(`${workspaceRoot}/research/${profileId}/${suffix}`, 'PUT', { ids })).status,
+      200
+    );
+  const updatedInput = `${intakeInput.rawInput}\nH3: Developer Utilities`;
+  assert.equal(
+    (
+      await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {
+        rawInput: updatedInput,
+        notes: 'Preserve this manual note.',
+        sourceThreadUrl: 'codex://threads/fixture-research',
+      })
+    ).status,
+    200
+  );
+  const regenerated = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST');
+  assert.equal(regenerated.status, 200);
+  const generated = (await regenerated.json()).data;
+  assert.equal(generated.provider, 'glm');
+  const profile = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(profile.rawInput, updatedInput);
+  assert.equal(profile.notes, 'Preserve this manual note.');
+  assert.equal(profile.sourceThreadUrl, 'codex://threads/fixture-research');
+  assert.equal(profile.analysis.provider, 'glm');
+  assert.equal(profile.analysis.researchMode, 'pasted_site_research');
+  assert.deepEqual(
+    profile.categories.map((item: { id: string }) => item.id),
+    [categoryId]
+  );
+  assert.deepEqual(
+    profile.sites.map((item: { id: string }) => item.id),
+    ['site']
+  );
+  assert.deepEqual(
+    profile.monitors.map((item: { id: string }) => item.id),
+    [monitorId]
+  );
+  assert.equal((await request(`${workspaceRoot}/research/${profileId}`, 'DELETE')).status, 200);
+  assert.equal((await (await request(`${workspaceRoot}/research`)).json()).data.profiles.length, 0);
+  assert.equal(
+    (
+      await database
+        .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE id = ?')
+        .bind(monitorId)
+        .first<{ count: number }>()
+    )?.count,
+    1
+  );
+  assert.equal(
+    (
+      await database
+        .prepare(
+          'SELECT count(*) AS count FROM competitor_research_monitor_links WHERE monitor_id = ?'
+        )
+        .bind(monitorId)
+        .first<{ count: number }>()
+    )?.count,
+    0
+  );
+});
+
+test('research regeneration rejects profiles without saved input and preserves their data', async () => {
+  const profileId = await researchProfile({ notes: 'Manual only' });
+  const response = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST');
+  assert.equal(response.status, 400);
+  const profile = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(profile.notes, 'Manual only');
+  assert.equal(profile.analysis, null);
+});
+
 test('Codex deep research import requires its task link and preserves listed public evidence', async () => {
   const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
   const missingTask = await request(`${workspaceRoot}/research/intake`, 'POST', {
@@ -1110,6 +1195,16 @@ test('Codex deep research import requires its task link and preserves listed pub
       ['https://tools.promptspace.in/', 'landing'],
       ['https://tools.promptspace.in/pricing', 'pricing'],
     ]
+  );
+  assert.equal(
+    (await request(`${workspaceRoot}/research/${created.profileId}/regenerate`, 'POST')).status,
+    200
+  );
+  const regeneratedReport = (await (await request(`${workspaceRoot}/research`)).json()).data;
+  assert.equal(regeneratedReport.profiles[0].analysis.researchMode, 'codex_competitor_analysis');
+  assert.equal(
+    regeneratedReport.profiles[0].sourceThreadUrl,
+    'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7'
   );
 });
 
@@ -1624,6 +1719,11 @@ test('research profiles reject foreign links, write attempts from non-owners and
     );
   assert.equal((await request(`${workspaceRoot}/research?monitorId=outside-monitor`)).status, 404);
   assert.equal(
+    (await request(`${workspaceRoot}/research/outside-research/regenerate`, 'POST')).status,
+    404
+  );
+  assert.equal((await request(`${workspaceRoot}/research/outside-research`, 'DELETE')).status, 404);
+  assert.equal(
     (
       await request(`${workspaceRoot}/research`, 'POST', {
         brandName: 'Duplicate',
@@ -1652,6 +1752,8 @@ test('research profiles reject foreign links, write attempts from non-owners and
         },
       ],
       [`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Blocked' }],
+      [`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', undefined],
+      [`${workspaceRoot}/research/${profileId}`, 'DELETE', undefined],
       [`${workspaceRoot}/research/${profileId}/categories`, 'PUT', { ids: [] }],
     ] as const)
       assert.equal((await request(path, method, body, token)).status, 403);

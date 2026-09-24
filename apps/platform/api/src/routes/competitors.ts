@@ -726,6 +726,10 @@ function researchRoutes() {
           values.push(JSON.stringify(body[key]));
         }
       }
+      if (body.rawInput !== undefined) {
+        assignments.push('raw_input = ?');
+        values.push(body.rawInput);
+      }
       const result = await c.env.DB.prepare(
         `UPDATE competitor_research_profiles SET ${assignments.join(', ')}, updated_at = ? WHERE id = ? AND workspace_id = ? RETURNING id`
       )
@@ -734,6 +738,113 @@ function researchRoutes() {
       if (!result)
         return c.json({ error: 'Research profile changed or duplicate homepage URL' }, 409);
       return c.json({ data: result });
+    })
+    .post('/:profileId/regenerate', async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      const profile = await c.env.DB.prepare(
+        'SELECT raw_input AS rawInput, analysis FROM competitor_research_profiles WHERE id = ? AND workspace_id = ?'
+      )
+        .bind(id, scope.workspaceId)
+        .first<{ rawInput: string | null; analysis: string | null }>();
+      if (!profile) return c.json({ error: 'Research profile not found' }, 404);
+      if (!profile.rawInput)
+        return c.json(
+          {
+            error:
+              'This research profile has no saved input. Add source material before regenerating.',
+          },
+          400
+        );
+      const generated = await generateCompetitorResearchIntake(c.env, {
+        rawInput: profile.rawInput,
+      });
+      if (!generated.ok)
+        return c.json(
+          {
+            error: `AI research generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(generated.attempts)}`,
+            attempts: generated.attempts,
+          },
+          503
+        );
+      let previousAnalysis: { researchMode?: string; localCapabilityId?: string | null } = {};
+      if (profile.analysis) {
+        try {
+          const parsed: unknown = JSON.parse(profile.analysis);
+          if (parsed && typeof parsed === 'object') {
+            const source = parsed as Record<string, unknown>;
+            previousAnalysis = {
+              ...(typeof source.researchMode === 'string'
+                ? { researchMode: source.researchMode }
+                : {}),
+              ...(typeof source.localCapabilityId === 'string' || source.localCapabilityId === null
+                ? { localCapabilityId: source.localCapabilityId }
+                : {}),
+            };
+          }
+        } catch {
+          previousAnalysis = {};
+        }
+      }
+      const updated = await c.env.DB.prepare(
+        'UPDATE competitor_research_profiles SET brand_name = ?, page_title = ?, product_summary = ?, seed_keywords = ?, payment_providers = ?, analysis = ?, updated_at = ? WHERE id = ? AND workspace_id = ? RETURNING id'
+      )
+        .bind(
+          generated.data.draft.brandName,
+          generated.data.draft.pageTitle,
+          generated.data.draft.productSummary,
+          JSON.stringify(generated.data.draft.seedKeywords),
+          JSON.stringify(generated.data.draft.paymentProviders),
+          JSON.stringify({
+            ...previousAnalysis,
+            provider: generated.data.provider,
+            model: generated.data.model,
+            generatedAt: generated.data.generatedAt,
+            detailedAnalysis: generated.data.draft.detailedAnalysis,
+            suggestedCategories: generated.data.draft.suggestedCategories,
+            evidenceGaps: generated.data.draft.evidenceGaps,
+          }),
+          generated.data.generatedAt,
+          id,
+          scope.workspaceId
+        )
+        .first();
+      if (!updated)
+        return c.json({ error: 'Research profile changed before regeneration completed' }, 409);
+      return c.json({
+        data: {
+          id,
+          provider: generated.data.provider,
+          model: generated.data.model,
+          regeneratedAt: generated.data.generatedAt,
+          limitations: [
+            'Only the saved input was analyzed; no target website, browser extension, Cookie, or Codex task was accessed.',
+            'Existing root-term grouping, manual categories, linked sites, linked monitors, sources, and notes were preserved.',
+            'No competitor monitor or scheduler was created or changed.',
+          ],
+        },
+      });
+    })
+    .delete('/:profileId', async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const id = c.req.param('profileId');
+      const deleted = await c.env.DB.prepare(
+        'DELETE FROM competitor_research_profiles WHERE id = ? AND workspace_id = ? RETURNING id'
+      )
+        .bind(id, scope.workspaceId)
+        .first();
+      if (!deleted) return c.json({ error: 'Research profile not found' }, 404);
+      return c.json({
+        data: {
+          id,
+          limitations: [
+            'Only this research profile and its classification or association links were deleted.',
+            'Independent competitor monitors, their history, and owned sites were preserved.',
+          ],
+        },
+      });
     })
     .put('/:profileId/categories', validate('json', competitorResearchLinksInput), async c => {
       const scope = await access(c, true);

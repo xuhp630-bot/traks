@@ -38,7 +38,11 @@ export const Route = createLazyFileRoute('/portal/competitors')({ component: Com
 const controlClass = 'min-h-11 w-full rounded-lg border border-[#E3E2E6] bg-white px-3 text-sm';
 type OwnedSite = { id: string; name: string; domain: string };
 type MonitorAction = { suffix: string; method: 'POST' | 'PATCH' | 'DELETE'; body?: object };
-type ResearchAction = { suffix: string; method: 'POST' | 'PATCH' | 'PUT'; body?: object };
+type ResearchAction = {
+  suffix: string;
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  body?: object;
+};
 const formatTime = (timestamp: number | null): string =>
   timestamp ? new Date(timestamp).toLocaleString() : '尚未检查';
 const labels: Record<keyof CompetitorSnapshot, string> = {
@@ -822,12 +826,14 @@ const splitList = (value: string): string[] => [
 function parsePaymentProviders(value: string): CompetitorResearchProfile['paymentProviders'] {
   const valid = new Set(['confirmed', 'evidence_only', 'disabled', 'unknown']);
   return splitList(value).map(item => {
-    const [provider, rawStatus] = item.split(':', 2).map(part => part.trim());
+    const [provider, rawStatus = '', ...evidenceParts] = item.split(':');
+    const evidence = evidenceParts.join(':').trim();
     return {
-      provider,
-      status: valid.has(rawStatus)
-        ? (rawStatus as CompetitorResearchProfile['paymentProviders'][number]['status'])
+      provider: provider.trim(),
+      status: valid.has(rawStatus.trim())
+        ? (rawStatus.trim() as CompetitorResearchProfile['paymentProviders'][number]['status'])
         : 'unknown',
+      ...(evidence ? { evidence } : {}),
     };
   });
 }
@@ -835,7 +841,12 @@ function parsePaymentProviders(value: string): CompetitorResearchProfile['paymen
 function formatPaymentProviders(
   providers: CompetitorResearchDraft['draft']['paymentProviders']
 ): string {
-  return providers.map(provider => `${provider.provider}:${provider.status}`).join('\n');
+  return providers
+    .map(
+      provider =>
+        `${provider.provider}:${provider.status}${provider.evidence ? `:${provider.evidence}` : ''}`
+    )
+    .join('\n');
 }
 
 type ResearchTextSection = { title: string | null; content: string };
@@ -1484,7 +1495,12 @@ function ResearchLibrary({
         action.method,
         action.body
       ),
-    onSuccess: () => {
+    onSuccess: (_, action) => {
+      if (action.method === 'DELETE')
+        setNotice('研究档案已删除；独立竞品监控、历史快照和己方网站均未改动。');
+      if (action.suffix.endsWith('/regenerate'))
+        setNotice('已基于保存的输入重新生成分析；词根、分类、关联、来源与备注均已保留。');
+      if (action.method === 'PATCH') setNotice('研究档案已更新。');
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
   });
@@ -2098,6 +2114,12 @@ function ResearchLibrary({
                 canManage={canManage}
                 pending={mutation.isPending}
                 onAction={action => mutation.mutateAsync(action)}
+                onDeleted={() => {
+                  const next = profiles.find(profile => profile.id !== selectedProfile.id);
+                  setSelectedProfileId(next?.id ?? '');
+                  if (profiles.length === 1 && page > 1)
+                    setPage(current => Math.max(1, current - 1));
+                }}
               />
             ) : (
               <p className="rounded-xl border border-[#E3E2E6] bg-white p-4 text-sm text-[#6F6D7A]">
@@ -2324,6 +2346,7 @@ function ResearchProfileCard({
   canManage,
   pending,
   onAction,
+  onDeleted,
 }: {
   profile: CompetitorResearchProfile;
   groups: CompetitorResearchGroup[];
@@ -2333,12 +2356,24 @@ function ResearchProfileCard({
   canManage: boolean;
   pending: boolean;
   onAction: (action: ResearchAction) => Promise<unknown>;
+  onDeleted: () => void;
 }): ReactElement {
   const [status, setStatus] = useState(profile.lifecycleStatus);
   const [primaryGroupId, setPrimaryGroupId] = useState(profile.primaryGroup?.id ?? '');
   const [categoryIds, setCategoryIds] = useState(profile.categories.map(category => category.id));
   const [siteIds, setSiteIds] = useState(profile.sites.map(site => site.id));
   const [monitorIds, setMonitorIds] = useState(profile.monitors.map(monitor => monitor.id));
+  const [editBrandName, setEditBrandName] = useState(profile.brandName);
+  const [editHomepageUrl, setEditHomepageUrl] = useState(profile.homepageUrl);
+  const [editPageTitle, setEditPageTitle] = useState(profile.pageTitle ?? '');
+  const [editSummary, setEditSummary] = useState(profile.productSummary ?? '');
+  const [editKeywords, setEditKeywords] = useState(profile.seedKeywords.join('\n'));
+  const [editPayments, setEditPayments] = useState(
+    formatPaymentProviders(profile.paymentProviders)
+  );
+  const [editSourceThreadUrl, setEditSourceThreadUrl] = useState(profile.sourceThreadUrl ?? '');
+  const [editNotes, setEditNotes] = useState(profile.notes ?? '');
+  const [editRawInput, setEditRawInput] = useState(profile.rawInput ?? '');
   const saveLinks = async (
     kind: 'categories' | 'sites' | 'monitors',
     ids: string[]
@@ -2355,6 +2390,62 @@ function ResearchProfileCard({
   };
   const selected = (event: FormEvent<HTMLSelectElement>): string[] =>
     Array.from(event.currentTarget.selectedOptions, option => option.value);
+  const saveProfile = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    try {
+      await onAction({
+        suffix: `/${encodeURIComponent(profile.id)}`,
+        method: 'PATCH',
+        body: {
+          brandName: editBrandName,
+          homepageUrl: editHomepageUrl,
+          pageTitle: editPageTitle || null,
+          productSummary: editSummary || null,
+          seedKeywords: splitList(editKeywords),
+          paymentProviders: parsePaymentProviders(editPayments),
+          sourceThreadUrl: editSourceThreadUrl || null,
+          notes: editNotes || null,
+          rawInput: editRawInput.trim() || null,
+        },
+      });
+    } catch {
+      return;
+    }
+  };
+  const regenerate = async (): Promise<void> => {
+    if (!profile.rawInput) return;
+    if (
+      !window.confirm(
+        `重新生成“${profile.brandName}”的分析？这会覆盖品牌、标题、摘要、种子词、支付结论和 AI 分析；分类、关联、来源与备注会保留。`
+      )
+    )
+      return;
+    try {
+      await onAction({
+        suffix: `/${encodeURIComponent(profile.id)}/regenerate`,
+        method: 'POST',
+      });
+    } catch {
+      return;
+    }
+  };
+  const remove = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `删除研究档案“${profile.brandName}”？仅删除该档案及其分类/关联；独立竞品监控、历史快照和己方网站会保留。`
+      )
+    )
+      return;
+    try {
+      await onAction({
+        suffix: `/${encodeURIComponent(profile.id)}`,
+        method: 'DELETE',
+      });
+      onDeleted();
+    } catch {
+      return;
+    }
+  };
   const primaryFinding = keyFinding(profile);
   const analysisSections = profile.analysis
     ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
@@ -2375,29 +2466,57 @@ function ResearchProfileCard({
           </a>
         </div>
         {canManage ? (
-          <select
-            aria-label={`${profile.brandName}研究状态`}
-            className="min-h-9 rounded-lg border px-2 text-xs"
-            value={status}
-            disabled={pending}
-            onChange={event => {
-              const next = event.target.value as CompetitorResearchStatus;
-              setStatus(next);
-              void onAction({
-                suffix: `/${encodeURIComponent(profile.id)}`,
-                method: 'PATCH',
-                body: { lifecycleStatus: next },
-              }).catch(() => {
-                setStatus(profile.lifecycleStatus);
-              });
-            }}
-          >
-            {Object.entries(researchStatusLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <select
+              aria-label={`${profile.brandName}研究状态`}
+              className="min-h-9 rounded-lg border px-2 text-xs"
+              value={status}
+              disabled={pending}
+              onChange={event => {
+                const next = event.target.value as CompetitorResearchStatus;
+                setStatus(next);
+                void onAction({
+                  suffix: `/${encodeURIComponent(profile.id)}`,
+                  method: 'PATCH',
+                  body: { lifecycleStatus: next },
+                }).catch(() => {
+                  setStatus(profile.lifecycleStatus);
+                });
+              }}
+            >
+              {Object.entries(researchStatusLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={pending || !profile.rawInput}
+              title={
+                profile.rawInput
+                  ? '使用已保存输入重新生成 AI 结论'
+                  : '先在编辑中保存输入资料后才能重新生成'
+              }
+              onClick={() => void regenerate()}
+            >
+              <RefreshCw size={15} className="mr-1.5" />
+              重新生成
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              className="text-red-700 hover:text-red-800"
+              onClick={() => void remove()}
+            >
+              <Trash2 size={15} className="mr-1.5" />
+              删除档案
+            </Button>
+          </div>
         ) : (
           <span className="rounded-full bg-[#F9F8F6] px-2 py-1 text-xs">
             {researchStatusLabels[profile.lifecycleStatus]}
@@ -2432,6 +2551,111 @@ function ResearchProfileCard({
         <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">
           备注：{profile.notes}
         </p>
+      )}
+      {canManage && (
+        <details className="mt-4 rounded-lg border border-[#E3E2E6] bg-[#F9F8F6] p-3">
+          <summary className="cursor-pointer text-sm font-medium">编辑研究档案</summary>
+          <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
+            可修订已保存的资料与原始输入。保存输入后可重新生成；编辑或重新生成均不会创建、启动或修改竞品监控。
+          </p>
+          <form onSubmit={event => void saveProfile(event)} className="mt-4">
+            <fieldset disabled={pending} className="grid gap-3 sm:grid-cols-2">
+              <label className="text-xs">
+                品牌 / 网站名称
+                <Input
+                  className="mt-2 min-h-11"
+                  value={editBrandName}
+                  onChange={event => setEditBrandName(event.target.value)}
+                  required
+                  maxLength={100}
+                />
+              </label>
+              <label className="text-xs">
+                首页公开 HTTPS URL
+                <Input
+                  className="mt-2 min-h-11"
+                  type="url"
+                  value={editHomepageUrl}
+                  onChange={event => setEditHomepageUrl(event.target.value)}
+                  required
+                  maxLength={500}
+                />
+              </label>
+              <label className="text-xs">
+                页面标题
+                <Input
+                  className="mt-2 min-h-11"
+                  value={editPageTitle}
+                  onChange={event => setEditPageTitle(event.target.value)}
+                  maxLength={200}
+                />
+              </label>
+              <label className="text-xs">
+                来源任务 / 备注链接
+                <Input
+                  className="mt-2 min-h-11"
+                  value={editSourceThreadUrl}
+                  onChange={event => setEditSourceThreadUrl(event.target.value)}
+                  maxLength={2048}
+                  placeholder="codex://threads/..."
+                />
+              </label>
+              <label className="text-xs sm:col-span-2">
+                产品 / 品类结论
+                <textarea
+                  className={`${controlClass} mt-2 min-h-24 py-2`}
+                  value={editSummary}
+                  onChange={event => setEditSummary(event.target.value)}
+                  maxLength={4000}
+                />
+              </label>
+              <label className="text-xs">
+                种子词（逗号或换行分隔）
+                <textarea
+                  className={`${controlClass} mt-2 min-h-20 py-2`}
+                  value={editKeywords}
+                  onChange={event => setEditKeywords(event.target.value)}
+                  maxLength={5000}
+                />
+              </label>
+              <label className="text-xs">
+                支付网关（`名称:状态:证据`，证据可选）
+                <textarea
+                  className={`${controlClass} mt-2 min-h-20 py-2`}
+                  value={editPayments}
+                  onChange={event => setEditPayments(event.target.value)}
+                  maxLength={6000}
+                  placeholder="Stripe:confirmed:pricing page"
+                />
+              </label>
+              <label className="text-xs sm:col-span-2">
+                研究备注
+                <textarea
+                  className={`${controlClass} mt-2 min-h-20 py-2`}
+                  value={editNotes}
+                  onChange={event => setEditNotes(event.target.value)}
+                  maxLength={4000}
+                />
+              </label>
+              <label className="text-xs sm:col-span-2">
+                输入资料
+                <textarea
+                  aria-label={`${profile.brandName}可编辑输入资料`}
+                  className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
+                  value={editRawInput}
+                  onChange={event => setEditRawInput(event.target.value)}
+                  required={Boolean(profile.rawInput)}
+                  minLength={20}
+                  maxLength={12000}
+                  placeholder="粘贴可复核的公开资料；至少 20 个字符。保存后可重新生成。"
+                />
+              </label>
+              <div className="sm:col-span-2">
+                <Button type="submit">保存编辑</Button>
+              </div>
+            </fieldset>
+          </form>
+        </details>
       )}
       {(profile.analysis || profile.rawInput) && (
         <section className="mt-5 border-t border-[#E3E2E6] pt-5" aria-label="预调研输入与结果">

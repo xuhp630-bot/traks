@@ -164,6 +164,9 @@ export const competitorResearchInput = competitorResearchFields
   );
 export const competitorResearchUpdate = competitorResearchFields
   .partial()
+  .extend({
+    rawInput: z.string().trim().min(20).max(12_000).nullable().optional(),
+  })
   .strict()
   .refine(value => Object.keys(value).length > 0, 'At least one change is required')
   .refine(
