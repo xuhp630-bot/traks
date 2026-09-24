@@ -875,34 +875,22 @@ function keyFinding(profile: CompetitorResearchProfile): string | null {
   );
 }
 
-function ResearchTextSections({
-  sections,
-  emptyLabel,
-}: {
-  sections: ResearchTextSection[];
-  emptyLabel: string;
-}): ReactElement {
-  if (!sections.length) return <p className="text-xs text-[#6F6D7A]">{emptyLabel}</p>;
+function paymentFinding(
+  profile: CompetitorResearchProfile,
+  analysisSections: ResearchTextSection[]
+): string {
+  const analysis = analysisSections.find(section => section.title?.includes('支付'))?.content;
+  if (analysis) return analysis;
+  const evidence = profile.paymentProviders
+    .map(provider => provider.evidence)
+    .filter((value): value is string => Boolean(value))
+    .join('；');
+  if (evidence) return evidence;
+  if (profile.paymentProviders.length)
+    return `已记录待核验服务商：${profile.paymentProviders.map(provider => provider.provider).join('、')}。`;
   return (
-    <div className="grid gap-2">
-      {sections.map((section, index) => (
-        <section
-          key={`${section.title ?? 'text'}-${index}`}
-          className="rounded-lg border border-[#E3E2E6] bg-white px-3 py-2"
-        >
-          {section.title && (
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-[#3D3B4F]">
-              {section.title}
-            </h4>
-          )}
-          <p
-            className={`${section.title ? 'mt-1' : ''} whitespace-pre-wrap break-words text-xs leading-5 text-[#555163]`}
-          >
-            {section.content}
-          </p>
-        </section>
-      ))}
-    </div>
+    profile.analysis?.evidenceGaps.find(gap => /支付|定价|结账/.test(gap)) ??
+    '未识别可确认的支付网关；需要补充公开价格、结账页或支付服务商证据。'
   );
 }
 
@@ -2137,6 +2125,7 @@ function ResearchProfileCard({
   const analysisSections = profile.analysis
     ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
     : [];
+  const paymentConclusion = paymentFinding(profile, analysisSections);
   return (
     <article className="rounded-xl border border-[#E3E2E6] bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2236,32 +2225,44 @@ function ResearchProfileCard({
             </section>
             <section className="rounded-xl border border-[#C9D9E6] bg-white p-3">
               <h5 className="text-sm font-semibold text-[#3D3B4F]">分析结果</h5>
-              <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
-                模型结论仅基于左侧输入，分类和支付判断仍需人工核验。
+              <dl className="mt-3 overflow-hidden rounded-lg border border-[#E3E2E6]">
+                <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 border-b border-[#E3E2E6] bg-[#F9F8F6] px-3 py-2 text-xs font-semibold text-[#3D3B4F]">
+                  <dt>项目</dt>
+                  <dd>结论</dd>
+                </div>
+                <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 border-b border-[#E3E2E6] px-3 py-3">
+                  <dt className="text-sm font-semibold text-[#3D3B4F]">品类</dt>
+                  <dd className="whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[#2F2D3A]">
+                    {primaryFinding ?? '未保存品类结论。'}
+                  </dd>
+                </div>
+                <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 border-b border-[#E3E2E6] px-3 py-3">
+                  <dt className="text-sm font-semibold text-[#3D3B4F]">种子词</dt>
+                  <dd className="flex flex-wrap gap-1.5">
+                    {profile.seedKeywords.length ? (
+                      profile.seedKeywords.map(keyword => (
+                        <span
+                          key={keyword}
+                          className="rounded-full bg-[#EFF0F2] px-2 py-1 font-mono text-xs leading-4 text-[#3D3B4F]"
+                        >
+                          {keyword}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-sm text-[#6F6D7A]">未保存种子词。</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 px-3 py-3">
+                  <dt className="text-sm font-semibold text-[#3D3B4F]">支付网关</dt>
+                  <dd className="whitespace-pre-wrap break-words text-sm leading-6 text-[#2F2D3A]">
+                    {paymentConclusion}
+                  </dd>
+                </div>
+              </dl>
+              <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
+                结论仅基于左侧输入；品类与支付状态仍需人工核验。
               </p>
-              {primaryFinding && (
-                <aside className="mt-3 rounded-lg border border-[#9BD5C4] bg-[#ECFBF5] p-3">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#1F6F57]">
-                    <Sparkles size={15} aria-hidden="true" />
-                    重点结论
-                  </div>
-                  <p className="mt-2 whitespace-pre-wrap break-words text-sm font-medium leading-6 text-[#245341]">
-                    {primaryFinding}
-                  </p>
-                </aside>
-              )}
-              <div className="mt-3 max-h-[34rem] overflow-auto pr-1">
-                <ResearchTextSections sections={analysisSections} emptyLabel="未保存详细分析。" />
-              </div>
-              {profile.analysis && (
-                <>
-                  <ResearchChips
-                    label="建议分类（待人工确认）"
-                    values={profile.analysis.suggestedCategories}
-                  />
-                  <ResearchChips label="待补证据" values={profile.analysis.evidenceGaps} />
-                </>
-              )}
             </section>
           </div>
         </section>
