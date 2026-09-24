@@ -29,6 +29,7 @@
     "prepare": "husky",
     "traks:build": "node installer/build-release.mjs",
     "traks:selfhost": "node installer/local-provision.mjs",
+    "traks:selfhost:keychain": "node installer/selfhost-keychain.mjs",
     "traks:notes": "node installer/changelog.mjs notes",
     "traks:upload-release": "node installer/upload-release.mjs",
     "traks:release": "node installer/release.mjs",

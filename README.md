@@ -351,6 +351,11 @@ Keychain service; the token is never written to a file, source control, or
 command output. This opt-in path does not apply to development or provisioning
 secrets.
 
+The same Keychain entries can deploy the existing `traks-selfhost` instance
+with `yarn traks:selfhost:keychain`. That command refreshes the local Wrangler
+OAuth session before applying migrations and updating the Workers; it never
+writes the release token to disk.
+
 ## Contributing
 
 Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md)
