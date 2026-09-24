@@ -587,6 +587,7 @@ function researchRoutes() {
             localCapabilityId:
               body.localCapabilityId ??
               (body.researchMode === 'codex_competitor_analysis' ? 'competitor-analysis' : null),
+            workflow: generated.data.workflow,
             provider: generated.data.provider,
             model: generated.data.model,
             generatedAt: generated.data.generatedAt,
@@ -816,7 +817,11 @@ function researchRoutes() {
             },
             503
           );
-        let previousAnalysis: { researchMode?: string; localCapabilityId?: string | null } = {};
+        let previousAnalysis: {
+          researchMode?: string;
+          localCapabilityId?: string | null;
+          workflow?: string;
+        } = {};
         if (profile.analysis) {
           try {
             const parsed: unknown = JSON.parse(profile.analysis);
@@ -830,6 +835,7 @@ function researchRoutes() {
                 source.localCapabilityId === null
                   ? { localCapabilityId: source.localCapabilityId }
                   : {}),
+                ...(typeof source.workflow === 'string' ? { workflow: source.workflow } : {}),
               };
             }
           } catch {
@@ -848,6 +854,7 @@ function researchRoutes() {
             rawInput,
             JSON.stringify({
               ...previousAnalysis,
+              workflow: generated.data.workflow,
               provider: generated.data.provider,
               model: generated.data.model,
               generatedAt: generated.data.generatedAt,

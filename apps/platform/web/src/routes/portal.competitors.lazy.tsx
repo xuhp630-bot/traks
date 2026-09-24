@@ -9,6 +9,7 @@ import {
   Plus,
   Sparkles,
   Trash2,
+  Pencil,
   ShieldCheck,
   AlertTriangle,
 } from 'lucide-react';
@@ -80,6 +81,8 @@ const localCapabilityLabel = (
   capabilityId ? competitorResearchLocalCapabilityMetadata[capabilityId]?.label : null;
 const isLocalSkillHandoff = (researchMode: CompetitorResearchIntakeMode | undefined): boolean =>
   researchMode === 'codex_competitor_analysis' || researchMode === 'codex_local_handoff';
+const isEvidenceBoundCompetitorAnalysis = (workflow: string | undefined): boolean =>
+  workflow === 'competitor-analysis-evidence-bound-v1';
 const preResearchStageLabels: Record<CompetitorPreResearchStage, string> = {
   imported: '已导入',
   reviewing: '分析中',
@@ -858,7 +861,7 @@ function formatPaymentProviders(
 type ResearchTextSection = { title: string | null; content: string };
 
 const analysisSectionLabel =
-  /^(产品类别与定位|可见工具(?:\/类别)?覆盖|可能的用户任务(?:（[^）]{0,40}）)?|关键词角度|支付(?:网关|证据|方式)?|(?:待补|缺失)证据|品牌(?:与产品)?|目标用户|商业模式|页面内容|优势(?:与差异)?|竞争定位)\s*[：:]/;
+  /^(产品类别与定位|可见定位与证据|可见工具(?:\/类别)?覆盖|可能的用户任务(?:（[^）]{0,40}）)?|关键词角度|竞争与差异化边界|支付(?:网关|证据|方式)?|(?:待补|缺失)证据|品牌(?:与产品)?|目标用户|商业模式|页面内容|优势(?:与差异)?|竞争定位)\s*[：:]/;
 
 function sentenceSections(value: string): ResearchTextSection[] {
   const sentences = value
@@ -877,7 +880,7 @@ function detailedAnalysisSections(value: string): ResearchTextSection[] {
     .split(/\n\s*\n+/)
     .flatMap(paragraph =>
       paragraph.split(
-        /(?=产品类别与定位\s*[：:]|可见工具(?:\/类别)?覆盖\s*[：:]|可能的用户任务(?:（[^）]{0,40}）)?\s*[：:]|关键词角度\s*[：:]|支付(?:网关|证据|方式)?\s*[：:]|(?:待补|缺失)证据\s*[：:]|品牌(?:与产品)?\s*[：:]|目标用户\s*[：:]|商业模式\s*[：:]|页面内容\s*[：:]|优势(?:与差异)?\s*[：:]|竞争定位\s*[：:])/
+        /(?=产品类别与定位\s*[：:]|可见定位与证据\s*[：:]|可见工具(?:\/类别)?覆盖\s*[：:]|可能的用户任务(?:（[^）]{0,40}）)?\s*[：:]|关键词角度\s*[：:]|竞争与差异化边界\s*[：:]|支付(?:网关|证据|方式)?\s*[：:]|(?:待补|缺失)证据\s*[：:]|品牌(?:与产品)?\s*[：:]|目标用户\s*[：:]|商业模式\s*[：:]|页面内容\s*[：:]|优势(?:与差异)?\s*[：:]|竞争定位\s*[：:])/
       )
     )
     .map(paragraph => paragraph.trim())
@@ -1777,7 +1780,7 @@ function ResearchLibrary({
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
                   {intakeMode === 'codex_local_handoff'
                     ? '导入已完成的本地 Skill 原文、公开证据 URL 和 Codex 任务链接。GLM 只整理导入资料，不会重新抓取目标站或运行本地能力。'
-                    : '粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM 仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。'}
+                    : '粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。在线模型按 competitor-analysis 的资料限定框架生成品牌、品类、种子词、支付结论和证据缺口；不会联网或假称已执行本机 Skill。'}
                 </p>
               </div>
               <div className="flex flex-wrap gap-3">
@@ -1928,7 +1931,7 @@ function ResearchLibrary({
                   ? '正在分析并保存…'
                   : intakeMode === 'codex_local_handoff'
                     ? `使用 ${researchModelLabels[intakeModelPreference]} 导入并保存`
-                    : `使用 ${researchModelLabels[intakeModelPreference]} 分析并保存`}
+                    : `按竞品分析框架使用 ${researchModelLabels[intakeModelPreference]} 分析并保存`}
               </Button>
               {existingProfileId && (
                 <Button
@@ -2454,6 +2457,9 @@ function ResearchProfileCard({
   const [editSourceThreadUrl, setEditSourceThreadUrl] = useState(profile.sourceThreadUrl ?? '');
   const [editNotes, setEditNotes] = useState(profile.notes ?? '');
   const [editRawInput, setEditRawInput] = useState(profile.rawInput ?? '');
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [regenerateModelPreference, setRegenerateModelPreference] =
+    useState<CompetitorResearchModelPreference>('glm');
   const saveLinks = async (
     kind: 'categories' | 'sites' | 'monitors',
     ids: string[]
@@ -2488,6 +2494,7 @@ function ResearchProfileCard({
           rawInput: editRawInput.trim() || null,
         },
       });
+      setEditorOpen(false);
     } catch {
       return;
     }
@@ -2496,7 +2503,7 @@ function ResearchProfileCard({
     if (!profile.rawInput) return;
     if (
       !window.confirm(
-        `重新生成“${profile.brandName}”的分析？这会覆盖品牌、标题、摘要、种子词、支付结论和 AI 分析；分类、关联、来源与备注会保留。`
+        `按 competitor-analysis 资料限定框架重新生成“${profile.brandName}”的分析？这会覆盖品牌、标题、摘要、种子词、支付结论和 AI 分析；分类、关联、来源与备注会保留。`
       )
     )
       return;
@@ -2504,7 +2511,7 @@ function ResearchProfileCard({
       await onAction({
         suffix: `/${encodeURIComponent(profile.id)}/regenerate`,
         method: 'POST',
-        body: { modelPreference: 'auto' },
+        body: { modelPreference: regenerateModelPreference },
       });
     } catch {
       return;
@@ -2575,16 +2582,46 @@ function ResearchProfileCard({
               type="button"
               size="sm"
               variant="outline"
+              disabled={pending}
+              onClick={() => setEditorOpen(open => !open)}
+            >
+              <Pencil size={15} className="mr-1.5" />
+              {editorOpen ? '收起编辑' : '编辑档案'}
+            </Button>
+            <label className="text-xs text-[#6F6D7A]">
+              重生成模型
+              <select
+                aria-label={`${profile.brandName}重新生成模型`}
+                className="ml-1 min-h-9 rounded-lg border px-2 text-xs text-[#3D3B4F]"
+                value={regenerateModelPreference}
+                disabled={pending || !profile.rawInput}
+                onChange={event =>
+                  setRegenerateModelPreference(
+                    event.target.value as CompetitorResearchModelPreference
+                  )
+                }
+              >
+                {Object.entries(researchModelLabels).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
               disabled={pending || !profile.rawInput}
               title={
                 profile.rawInput
-                  ? '使用已保存输入重新生成 AI 结论'
+                  ? '使用已保存输入按竞品分析框架重新生成结论'
                   : '先在编辑中保存输入资料后才能重新生成'
               }
               onClick={() => void regenerate()}
             >
               <RefreshCw size={15} className="mr-1.5" />
-              重新生成
+              按框架重新生成
             </Button>
             <Button
               type="button"
@@ -2634,7 +2671,11 @@ function ResearchProfileCard({
         </p>
       )}
       {canManage && (
-        <details className="mt-4 rounded-lg border border-[#E3E2E6] bg-[#F9F8F6] p-3">
+        <details
+          className="mt-4 rounded-lg border border-[#E3E2E6] bg-[#F9F8F6] p-3"
+          open={editorOpen}
+          onToggle={event => setEditorOpen(event.currentTarget.open)}
+        >
           <summary className="cursor-pointer text-sm font-medium">编辑研究档案</summary>
           <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
             可修订已保存的资料与原始输入。保存输入后可重新生成；编辑或重新生成均不会创建、启动或修改竞品监控。
@@ -2753,7 +2794,9 @@ function ResearchProfileCard({
                   ? `本地 Skill · ${
                       localCapabilityLabel(profile.analysis.localCapabilityId) ?? '竞品分析'
                     } · `
-                  : '粘贴资料分析 · '}
+                  : isEvidenceBoundCompetitorAnalysis(profile.analysis.workflow)
+                    ? '竞品分析框架（资料限定）· '
+                    : '粘贴资料分析 · '}
                 {profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · {profile.analysis.model} ·{' '}
                 {formatTime(profile.analysis.generatedAt)}
               </p>
@@ -2813,7 +2856,9 @@ function ResearchProfileCard({
               <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
                 {isLocalSkillHandoff(profile.analysis?.researchMode)
                   ? '结论来自导入的本地 Skill 研究及其列出的证据 URL；Traks 未访问目标站，品类与支付状态仍需人工核验。'
-                  : '结论仅基于左侧输入；品类与支付状态仍需人工核验。'}
+                  : isEvidenceBoundCompetitorAnalysis(profile.analysis?.workflow)
+                    ? '在线模型按 competitor-analysis 的资料限定框架整理结论；未执行本机 Skill 或联网研究，品类、支付与竞争判断仍需人工核验。'
+                    : '结论仅基于左侧输入；品类与支付状态仍需人工核验。'}
               </p>
             </section>
           </div>

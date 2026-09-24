@@ -118,7 +118,12 @@ before(async () => {
           brandName: 'PromptSpace',
           pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
           productSummary: 'A free browser-based developer utility collection.',
-          detailedAnalysis: '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。',
+          categoryConclusion: '面向开发者的免费在线工具集合。',
+          positioningEvidence: '粘贴标题和分类展示了免费、免注册的开发者工具定位。',
+          customerTasks: '开发者可在浏览器中处理 JSON、编码、文本与转换任务。',
+          keywordRationale: '关键词来自页面可见的 developer tools、JSON 和 AI utilities。',
+          competitionPerspective: '粘贴资料未包含直接竞品或市场份额，无法形成竞争集合判断。',
+          paymentConclusion: '未提供价格页、结账页或支付服务商证据。',
           suggestedCategories: ['开发者工具站'],
           seedKeywords: ['free developer tools', 'JSON tools'],
           paymentProviderCandidates: [],
@@ -966,8 +971,13 @@ test('pasted research intake generates detailed evidence-bound analysis without 
           brandName: 'PromptSpace',
           pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
           productSummary: 'A free browser-based developer utility collection.',
-          detailedAnalysis:
-            '该站点是面向开发者的免费在线工具集合。输入仅展示分类和工具数量，未提供价格页、结账页或支付服务商证据。',
+          categoryConclusion: '面向开发者的免费在线工具集合。',
+          positioningEvidence: '输入展示开发者工具分类与工具数量。',
+          customerTasks: '可处理 JSON、AI utilities 等页面明确列出的工具任务。',
+          keywordRationale: '关键词来自 free developer tools、JSON tools 和 AI utilities。',
+          competitionPerspective:
+            '输入没有列出直接竞品、市场份额或用户反馈，不能给出竞争强弱结论。',
+          paymentConclusion: '未提供价格页、结账页或支付服务商证据。',
           suggestedCategories: ['开发者工具站', '在线工具导航'],
           seedKeywords: ['free developer tools', 'JSON tools', 'AI utilities'],
           paymentProviders: [],
@@ -982,6 +992,7 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal(result.data.provider, 'glm');
   assert.equal(result.data.model, 'glm-5.3');
   assert.equal(result.data.generatedAt, instant);
+  assert.equal(result.data.workflow, 'competitor-analysis-evidence-bound-v1');
   assert.deepEqual(result.data.draft.suggestedCategories, ['开发者工具站', '在线工具导航']);
   assert.deepEqual(result.data.draft.paymentProviders, []);
   assert.match(result.data.draft.detailedAnalysis, /未提供价格页/);
@@ -990,9 +1001,9 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
   assert.equal(calls[0].body.max_tokens, 4200);
   assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
-  assert.match(JSON.stringify(calls[0].body.messages), /产品类别与定位/);
+  assert.match(JSON.stringify(calls[0].body.messages), /competitor-analysis/);
   assert.match(JSON.stringify(calls[0].body.messages), /single most important/);
-  assert.match(JSON.stringify(calls[0].body.messages), /900–2200 Chinese characters/);
+  assert.match(JSON.stringify(calls[0].body.messages), /competitionPerspective/);
 });
 
 test('AI research intake accepts GLM-compatible JSON response variants', async () => {
@@ -1000,8 +1011,12 @@ test('AI research intake accepts GLM-compatible JSON response variants', async (
     brandName: 'BrandGene',
     pageTitle: '',
     productSummary: '',
-    detailedAnalysis:
-      '产品类别与定位：基于粘贴内容分析。\n\n待补证据：支付和定价信息需要人工核验。',
+    categoryConclusion: '基于粘贴内容的 AI 品牌工具。',
+    positioningEvidence: '输入提供了品牌生成相关页面信息。',
+    customerTasks: '用户可完成品牌命名与视觉探索任务。',
+    keywordRationale: '关键词来自 AI brand generator。',
+    competitionPerspective: '未提供市场或竞争者来源，不能给出竞争集合结论。',
+    paymentConclusion: '支付和定价信息需要人工核验。',
     suggestedCategories: ['AI 品牌工具'],
     seedKeywords: ['AI brand generator'],
     paymentProviders: [],
@@ -1021,7 +1036,7 @@ test('AI research intake accepts GLM-compatible JSON response variants', async (
     assert.equal(result.ok, true);
     if (!result.ok) continue;
     assert.equal(result.data.draft.pageTitle, null);
-    assert.equal(result.data.draft.productSummary, null);
+    assert.match(result.data.draft.productSummary ?? '', /^品类：基于粘贴内容的 AI 品牌工具。/);
     assert.equal(result.data.draft.brandName, 'BrandGene');
   }
 });
@@ -1090,10 +1105,15 @@ test('pasted research intake saves source and detailed analysis without creating
   });
   assert.deepEqual(report.profiles[0].categories, []);
   assert.equal(report.profiles[0].rawInput, intakeInput.rawInput);
-  assert.equal(
+  assert.match(
     report.profiles[0].analysis.detailedAnalysis,
-    '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。'
+    /^产品类别与定位：面向开发者的免费在线工具集合。/
   );
+  assert.match(
+    report.profiles[0].analysis.detailedAnalysis,
+    /竞争与差异化边界：粘贴资料未包含直接竞品/
+  );
+  assert.equal(report.profiles[0].analysis.workflow, 'competitor-analysis-evidence-bound-v1');
   assert.equal('modelMetadata' in report.profiles[0].analysis, false);
   assert.equal(
     (

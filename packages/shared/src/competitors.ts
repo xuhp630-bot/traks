@@ -9,6 +9,8 @@ export const competitorResearchIntakeMode = z.enum([
 ]);
 export const competitorResearchModelPreference = z.enum(['auto', 'glm', 'terra']);
 export type CompetitorResearchModelPreference = z.infer<typeof competitorResearchModelPreference>;
+export const competitorResearchAnalysisWorkflow = z.enum(['competitor-analysis-evidence-bound-v1']);
+export type CompetitorResearchAnalysisWorkflow = z.infer<typeof competitorResearchAnalysisWorkflow>;
 export const competitorResearchLocalCapability = z.enum([
   'competitor-analysis',
   'competitor-profiling',
@@ -387,6 +389,7 @@ export interface CompetitorResearchSource {
 export interface CompetitorResearchAnalysis {
   researchMode?: CompetitorResearchIntakeMode;
   localCapabilityId?: CompetitorResearchLocalCapability | null;
+  workflow?: CompetitorResearchAnalysisWorkflow;
   provider: 'glm' | 'terra';
   model: string;
   generatedAt: number;
