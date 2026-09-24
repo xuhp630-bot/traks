@@ -833,7 +833,7 @@ type ResearchTextSection = { title: string | null; content: string };
 const rawInputLabel =
   /^\s*([A-Za-z][A-Za-z0-9 /&+()._-]{0,78}|[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9 /&+()._-]{0,78})\s*[：:]\s*(.*)$/;
 const analysisSectionLabel =
-  /^(产品类别与定位|可见工具(?:\/类别)?覆盖|可能的用户任务|关键词角度|支付(?:网关|证据|方式)?|待补证据|品牌(?:与产品)?|目标用户|商业模式|页面内容|优势(?:与差异)?|竞争定位)\s*[：:]/;
+  /^(产品类别与定位|可见工具(?:\/类别)?覆盖|可能的用户任务(?:（[^）]{0,40}）)?|关键词角度|支付(?:网关|证据|方式)?|(?:待补|缺失)证据|品牌(?:与产品)?|目标用户|商业模式|页面内容|优势(?:与差异)?|竞争定位)\s*[：:]/;
 
 function rawInputSections(value: string): ResearchTextSection[] {
   const sections: ResearchTextSection[] = [];
@@ -870,7 +870,7 @@ function detailedAnalysisSections(value: string): ResearchTextSection[] {
     .split(/\n\s*\n+/)
     .flatMap(paragraph =>
       paragraph.split(
-        /(?=产品类别与定位\s*[：:]|可见工具(?:\/类别)?覆盖\s*[：:]|可能的用户任务\s*[：:]|关键词角度\s*[：:]|支付(?:网关|证据|方式)?\s*[：:]|待补证据\s*[：:]|品牌(?:与产品)?\s*[：:]|目标用户\s*[：:]|商业模式\s*[：:]|页面内容\s*[：:]|优势(?:与差异)?\s*[：:]|竞争定位\s*[：:])/
+        /(?=产品类别与定位\s*[：:]|可见工具(?:\/类别)?覆盖\s*[：:]|可能的用户任务(?:（[^）]{0,40}）)?\s*[：:]|关键词角度\s*[：:]|支付(?:网关|证据|方式)?\s*[：:]|(?:待补|缺失)证据\s*[：:]|品牌(?:与产品)?\s*[：:]|目标用户\s*[：:]|商业模式\s*[：:]|页面内容\s*[：:]|优势(?:与差异)?\s*[：:]|竞争定位\s*[：:])/
       )
     )
     .map(paragraph => paragraph.trim())
