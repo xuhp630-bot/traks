@@ -18,7 +18,7 @@
  * engine never needs to hash anything at runtime.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createHash, createHmac } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -43,7 +43,29 @@ function fromDoppler(name) {
     process.exit(1);
   }
 }
-const ACCOUNT_ID = fromDoppler('CLOUDFLARE_ACCOUNT_ID');
+const RELEASE_KEYCHAIN_SERVICE = 'com.traks.release';
+function fromKeychain(name) {
+  if (process.platform !== 'darwin') return null;
+  try {
+    return execFileSync(
+      'security',
+      ['find-generic-password', '-s', RELEASE_KEYCHAIN_SERVICE, '-a', name, '-w'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+function fromReleaseSecret(name) {
+  if (process.env.TRAKS_RELEASE_CREDENTIAL_SOURCE === 'keychain') {
+    const value = fromKeychain(name);
+    if (value) return value;
+    console.error(`${name}: not readable from the macOS Keychain (${RELEASE_KEYCHAIN_SERVICE})`);
+    process.exit(1);
+  }
+  return fromDoppler(name);
+}
+const ACCOUNT_ID = fromReleaseSecret('CLOUDFLARE_ACCOUNT_ID');
 // blake3-wasm ships inside wrangler (resolved via the api workspace) - the
 // same implementation wrangler uses for asset hashes, which must match.
 const apiRequire = createRequire(path.join(ROOT, 'apps/platform/api/package.json'));
@@ -51,7 +73,7 @@ const require = createRequire(apiRequire.resolve('wrangler/package.json'));
 const blake3 = require('blake3-wasm');
 
 // Release-upload credential (R2 storage write).
-const token = fromDoppler('CATALOG_TOKEN');
+const token = fromReleaseSecret('CATALOG_TOKEN');
 
 // Version guard: an upload under an unchanged version is invisible to
 // deployed instances (the update banner compares manifest.version).
@@ -68,10 +90,9 @@ if (live?.data?.version === localVersion && process.env.FORCE_RELEASE !== '1') {
 }
 
 const sha256hex = d => createHash('sha256').update(d).digest('hex');
-const verify = await fetch(
-  'https://api.cloudflare.com/client/v4/user/tokens/verify',
-  { headers: { Authorization: `Bearer ${token}` } }
-).then(r => r.json());
+const verify = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {
+  headers: { Authorization: `Bearer ${token}` },
+}).then(r => r.json());
 const keyId = verify?.result?.id;
 if (!keyId) {
   console.error('token verify failed');

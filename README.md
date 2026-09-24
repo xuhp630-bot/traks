@@ -335,7 +335,7 @@ yarn build        # build all workspaces
 yarn check:ci     # everything CI runs: format, lint, build, db, tracker
 ```
 
-**Secrets come from Doppler only.** Nothing reads a secret from the shell
+**Secrets come from Doppler by default.** Nothing reads a secret from the shell
 environment or a local file. The `dev` scripts download each Worker's dev
 config (`traks-api`, `traks-collect`, `traks-home`) into a git-ignored
 `.dev.vars.doppler` and hand it to `wrangler dev`; the release and setup
@@ -343,6 +343,13 @@ scripts under `installer/` and `scripts/` read `traks-home/prd`. Running any of
 them needs `doppler login` and access to those projects (or Doppler projects of
 your own with the same names and keys: `VISITOR_HASH_SECRET` for collect,
 `BETTER_AUTH_SECRET` and `R2_SQL_TOKEN` for the api, `ADMIN_KEY` for home).
+
+On an approved macOS maintainer machine, release publishing can explicitly use
+the login Keychain instead: `yarn traks:release:keychain`. It reads only
+`CLOUDFLARE_ACCOUNT_ID` and `CATALOG_TOKEN` from the `com.traks.release`
+Keychain service; the token is never written to a file, source control, or
+command output. This opt-in path does not apply to development or provisioning
+secrets.
 
 ## Contributing
 
