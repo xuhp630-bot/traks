@@ -78,6 +78,12 @@ const draftCompletion = (draft: object, status = 200): Response =>
     { status, headers: { 'content-type': 'application/json' } }
   );
 
+const completionPayload = (payload: object): Response =>
+  new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
 before(async () => {
   const bundle = await build({
     entryPoints: ['scripts/competitor-worker-fixture.ts'],
@@ -874,9 +880,59 @@ test('pasted research intake generates detailed evidence-bound analysis without 
   assert.equal('modelMetadata' in result.data.draft, false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
-  assert.equal(calls[0].body.max_tokens, 3200);
+  assert.equal(calls[0].body.max_tokens, 4200);
   assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
   assert.match(JSON.stringify(calls[0].body.messages), /产品类别与定位/);
+  assert.match(JSON.stringify(calls[0].body.messages), /900–2200 Chinese characters/);
+});
+
+test('AI research intake accepts GLM-compatible JSON response variants', async () => {
+  const draft = {
+    brandName: 'BrandGene',
+    pageTitle: '',
+    productSummary: '',
+    detailedAnalysis: '产品类别与定位：基于粘贴内容分析。\n\n待补证据：支付和定价信息需要人工核验。',
+    suggestedCategories: ['AI 品牌工具'],
+    seedKeywords: ['AI brand generator'],
+    paymentProviders: [],
+    evidenceGaps: ['未提供支付证据。'],
+  };
+  const variants = [
+    { choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(draft)}\n\`\`\`` } }] },
+    { choices: [{ message: { content: [{ type: 'text', text: JSON.stringify(draft) }] } }] },
+    { choices: [{ message: { parsed: draft, content: null } }] },
+  ];
+  for (const payload of variants) {
+    const result = await generateCompetitorResearchIntake(
+      { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+      intakeInput,
+      { fetcher: (async () => completionPayload(payload)) as typeof fetch }
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.data.draft.pageTitle, null);
+    assert.equal(result.data.draft.productSummary, null);
+    assert.equal(result.data.draft.brandName, 'BrandGene');
+  }
+});
+
+test('AI research intake classifies an upstream length stop without saving a partial response', async () => {
+  const result = await generateCompetitorResearchIntake(
+    { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+    intakeInput,
+    {
+      fetcher: (async () =>
+        completionPayload({
+          choices: [{ finish_reason: 'length', message: { content: '{"brandName":"BrandGene"' } }],
+        })) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.deepEqual(result.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'truncated_response' },
+    { provider: 'terra', model: 'unconfigured', outcome: 'skipped', reason: 'not_configured' },
+  ]);
 });
 
 test('pasted research intake saves source and detailed analysis without creating a monitor', async () => {

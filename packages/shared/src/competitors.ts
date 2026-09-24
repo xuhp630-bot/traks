@@ -371,7 +371,8 @@ export interface CompetitorResearchDraft {
       | 'timeout'
       | 'upstream_rejected'
       | 'unavailable'
-      | 'invalid_response';
+      | 'invalid_response'
+      | 'truncated_response';
   }[];
   limitations: string[];
 }
