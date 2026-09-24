@@ -6,6 +6,19 @@ ships separately and is not listed here.
 
 ## Unreleased
 
+## 0.1.44 - 2026-09-24
+
+### Added
+
+- A data-quality workflow for exhaustive site instrumentation: session-level QA/internal/unknown isolation, strict entry funnels, error evidence, and read-only MCP queries for quality insights and paged evidence.
+- CRM quality evidence now tracks the separately verified states for inbound candidates, consent, delivery, replies, and follow-up instead of treating anonymous analytics as customer records.
+- Competitor research now saves pasted or local-Skill evidence, GLM-first/Terra-fallback drafts, Keyword Harvester action paths, and manual links without automatically crawling a target or creating monitoring.
+- Research results are owned by an explicit root-term and major-category group; later classifications are independent fine-grained tags, with read-only MCP filtering and imports bound to the parent group.
+
+### Changed
+
+- The dashboard prioritizes journey and engagement evidence, with more focused diagnosis views for analytics quality, errors, and retained research conclusions.
+
 ## 0.1.41 - 2026-09-10
 
 ### Added
