@@ -5,13 +5,24 @@ import type {
   CompetitorResearchSource,
   CompetitorResearchPayment,
   CompetitorResearchAnalysis,
+  CompetitorResearchGroup,
 } from '@traks/shared';
 import { COMPETITOR_LIMITS } from '@traks/shared';
 
 type StoredProfile = Omit<
   CompetitorResearchProfile,
-  'seedKeywords' | 'paymentProviders' | 'sources' | 'analysis' | 'categories' | 'sites' | 'monitors'
+  | 'seedKeywords'
+  | 'paymentProviders'
+  | 'sources'
+  | 'analysis'
+  | 'primaryGroup'
+  | 'categories'
+  | 'sites'
+  | 'monitors'
 > & {
+  primaryGroupId: string | null;
+  primaryGroupName: string | null;
+  primaryGroupRootTerm: string | null;
   seedKeywords: string;
   paymentProviders: string;
   sources: string;
@@ -19,7 +30,7 @@ type StoredProfile = Omit<
 };
 
 const PROFILE_COLUMNS =
-  'id, workspace_id AS workspaceId, brand_name AS brandName, homepage_url AS homepageUrl, hostname, page_title AS pageTitle, product_summary AS productSummary, lifecycle_status AS lifecycleStatus, seed_keywords AS seedKeywords, payment_providers AS paymentProviders, sources, source_thread_url AS sourceThreadUrl, notes, raw_input AS rawInput, analysis, created_at AS createdAt, updated_at AS updatedAt';
+  'profile.id, profile.workspace_id AS workspaceId, profile.brand_name AS brandName, profile.homepage_url AS homepageUrl, profile.hostname, profile.page_title AS pageTitle, profile.product_summary AS productSummary, profile.lifecycle_status AS lifecycleStatus, profile.primary_group_id AS primaryGroupId, research_group.name AS primaryGroupName, research_group.root_term AS primaryGroupRootTerm, profile.seed_keywords AS seedKeywords, profile.payment_providers AS paymentProviders, profile.sources, profile.source_thread_url AS sourceThreadUrl, profile.notes, profile.raw_input AS rawInput, profile.analysis, profile.created_at AS createdAt, profile.updated_at AS updatedAt';
 
 function json<T>(value: string, fallback: T): T {
   try {
@@ -40,6 +51,32 @@ export async function researchProfileExists(
       .bind(profileId, workspaceId)
       .first()
   );
+}
+
+export async function researchGroupExists(
+  db: D1Database,
+  workspaceId: string,
+  groupId: string
+): Promise<boolean> {
+  return Boolean(
+    await db
+      .prepare('SELECT id FROM competitor_research_groups WHERE id = ? AND workspace_id = ?')
+      .bind(groupId, workspaceId)
+      .first()
+  );
+}
+
+export async function competitorResearchGroups(
+  db: D1Database,
+  workspaceId: string
+): Promise<CompetitorResearchGroup[]> {
+  const rows = await db
+    .prepare(
+      'SELECT research_group.id, research_group.name, research_group.root_term AS rootTerm, (SELECT count(*) FROM competitor_research_profiles AS profile WHERE profile.primary_group_id = research_group.id) AS profileCount FROM competitor_research_groups AS research_group WHERE research_group.workspace_id = ? ORDER BY research_group.root_term_key, research_group.name_key, research_group.id'
+    )
+    .bind(workspaceId)
+    .all<CompetitorResearchGroup>();
+  return rows.results;
 }
 
 export async function replaceResearchCategoryLinks(
@@ -109,6 +146,10 @@ export async function competitorResearchReport(
     clauses.push('profile.lifecycle_status = ?');
     values.push(scopeFilters.lifecycleStatus);
   }
+  if (scopeFilters.groupId) {
+    clauses.push('profile.primary_group_id = ?');
+    values.push(scopeFilters.groupId);
+  }
   if (scopeFilters.categoryId) {
     clauses.push(
       'EXISTS (SELECT 1 FROM competitor_research_category_links AS link WHERE link.profile_id = profile.id AND link.category_id = ?)'
@@ -137,7 +178,7 @@ export async function competitorResearchReport(
   const page = Math.min(requestedPage, totalPages);
   const rows = await db
     .prepare(
-      `SELECT ${PROFILE_COLUMNS} FROM competitor_research_profiles AS profile WHERE ${where} ORDER BY CASE lifecycle_status WHEN 'focus' THEN 0 WHEN 'watch' THEN 1 WHEN 'inbox' THEN 2 WHEN 'parked' THEN 3 ELSE 4 END, updated_at DESC, id DESC LIMIT ? OFFSET ?`
+      `SELECT ${PROFILE_COLUMNS} FROM competitor_research_profiles AS profile LEFT JOIN competitor_research_groups AS research_group ON research_group.id = profile.primary_group_id WHERE ${where} ORDER BY CASE WHEN profile.primary_group_id IS NULL THEN 1 ELSE 0 END, research_group.root_term_key, research_group.name_key, CASE profile.lifecycle_status WHEN 'focus' THEN 0 WHEN 'watch' THEN 1 WHEN 'inbox' THEN 2 WHEN 'parked' THEN 3 ELSE 4 END, profile.updated_at DESC, profile.id DESC LIMIT ? OFFSET ?`
     )
     .bind(...values, pageSize, (page - 1) * pageSize)
     .all<StoredProfile>();
@@ -195,18 +236,27 @@ export async function competitorResearchReport(
       researchSiteLinks: COMPETITOR_LIMITS.researchSiteLinks,
       researchMonitorLinks: COMPETITOR_LIMITS.researchMonitorLinks,
     },
-    profiles: rows.results.map(profile => ({
-      ...profile,
-      seedKeywords: json<string[]>(profile.seedKeywords, []),
-      paymentProviders: json<CompetitorResearchPayment[]>(profile.paymentProviders, []),
-      sources: json<CompetitorResearchSource[]>(profile.sources, []),
-      analysis: profile.analysis
-        ? json<CompetitorResearchAnalysis | null>(profile.analysis, null)
-        : null,
-      categories: categories.get(profile.id) ?? [],
-      sites: sites.get(profile.id) ?? [],
-      monitors: monitors.get(profile.id) ?? [],
-    })),
+    profiles: rows.results.map(
+      ({ primaryGroupId, primaryGroupName, primaryGroupRootTerm, ...profile }) => ({
+        ...profile,
+        primaryGroup: primaryGroupId
+          ? {
+              id: primaryGroupId,
+              name: primaryGroupName ?? '已删除大分类',
+              rootTerm: primaryGroupRootTerm ?? '待补词根',
+            }
+          : null,
+        seedKeywords: json<string[]>(profile.seedKeywords, []),
+        paymentProviders: json<CompetitorResearchPayment[]>(profile.paymentProviders, []),
+        sources: json<CompetitorResearchSource[]>(profile.sources, []),
+        analysis: profile.analysis
+          ? json<CompetitorResearchAnalysis | null>(profile.analysis, null)
+          : null,
+        categories: categories.get(profile.id) ?? [],
+        sites: sites.get(profile.id) ?? [],
+        monitors: monitors.get(profile.id) ?? [],
+      })
+    ),
     limitations: [
       'Only user-entered structured research and linked public-page records are stored.',
       'No full-page HTML, checkout payload, credentials, competitor traffic or customer data is collected.',

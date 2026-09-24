@@ -14,6 +14,7 @@ import type {
   CompetitorResearchFilters,
   CompetitorResearchIntakeInput,
   CompetitorResearchIntakeResult,
+  CompetitorResearchGroup,
   CompetitorResearchReport,
 } from '@traks/shared';
 import type { buildAnalysisPackage } from '@traks/shared';
@@ -132,6 +133,7 @@ export const api = {
   ): Promise<{ data: CompetitorResearchReport }> {
     const query = new URLSearchParams();
     if (filters.lifecycleStatus) query.set('lifecycleStatus', filters.lifecycleStatus);
+    if (filters.groupId) query.set('groupId', filters.groupId);
     if (filters.categoryId) query.set('categoryId', filters.categoryId);
     if (filters.siteId) query.set('siteId', filters.siteId);
     if (filters.monitorId) query.set('monitorId', filters.monitorId);
@@ -140,6 +142,13 @@ export const api = {
     const response = await fetch(
       `${competitorRoot({ workspaceId })}/research${query.size ? `?${query}` : ''}`
     );
+    await assertOk(response);
+    return response.json();
+  },
+  async getCompetitorResearchGroups(
+    workspaceId: string
+  ): Promise<{ data: { groups: CompetitorResearchGroup[]; canManage: boolean; limit: number } }> {
+    const response = await fetch(`${competitorRoot({ workspaceId })}/research/groups`);
     await assertOk(response);
     return response.json();
   },

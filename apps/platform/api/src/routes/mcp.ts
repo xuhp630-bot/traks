@@ -12,7 +12,12 @@
  *     --header "Authorization: Bearer traks_pat_…"
  */
 import type { Context } from 'hono';
-import { PERIODS, trackerSnippet } from '@traks/shared';
+import {
+  PERIODS,
+  competitorResearchLocalCapability,
+  competitorResearchLocalCapabilityMetadata,
+  trackerSnippet,
+} from '@traks/shared';
 import { z } from 'zod';
 import type { Bindings, Variables } from '../types';
 
@@ -114,11 +119,22 @@ const competitorResearchArgs = z
   .object({
     workspaceId: competitorId,
     lifecycleStatus: z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']).optional(),
+    groupId: competitorId.optional(),
     categoryId: competitorId.optional(),
     siteId: competitorId.optional(),
     monitorId: competitorId.optional(),
     page: z.number().int().min(1).optional(),
     pageSize: z.union([z.literal(10), z.literal(20)]).optional(),
+  })
+  .strict();
+const competitorResearchImportArgs = z
+  .object({
+    workspaceId: competitorId,
+    rawInput: z.string().trim().min(20).max(12_000),
+    lifecycleStatus: z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']).default('inbox'),
+    primaryGroupId: competitorId,
+    localCapabilityId: competitorResearchLocalCapability,
+    sourceThreadUrl: z.string().trim().min(1).max(2048),
   })
   .strict();
 const competitorPreResearchArgs = z
@@ -143,7 +159,15 @@ function competitorReadPath(args: Record<string, unknown>, history = false): str
 
 function competitorResearchReadPath(args: Record<string, unknown>): string {
   const query = new URLSearchParams();
-  for (const key of ['lifecycleStatus', 'categoryId', 'siteId', 'monitorId', 'page', 'pageSize']) {
+  for (const key of [
+    'lifecycleStatus',
+    'groupId',
+    'categoryId',
+    'siteId',
+    'monitorId',
+    'page',
+    'pageSize',
+  ]) {
     if (args[key]) query.set(key, String(args[key]));
   }
   const root = `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research`;
@@ -184,6 +208,22 @@ const TOOLS: ToolDef[] = [
     }),
   },
   {
+    name: 'get_competitor_research_groups',
+    description:
+      'Read the root-term and major-category groups that own competitor research results, with their saved-profile counts. Read this before importing a new research result so the result has the correct parent group. Does not fetch external pages or change data.',
+    inputSchema: {
+      type: 'object',
+      properties: { workspaceId: str('Workspace id from list_competitor_workspaces') },
+      required: ['workspaceId'],
+      additionalProperties: false,
+    },
+    validateArgs: args => z.object({ workspaceId: competitorId }).strict().safeParse(args).success,
+    request: args => ({
+      method: 'GET',
+      path: `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research/groups`,
+    }),
+  },
+  {
     name: 'get_competitor_research',
     description:
       'Read paginated competitor research profiles: saved pasted source text, AI analysis, brand, product summary, seed keywords, payment-provider evidence, sources, lifecycle status, categories, and explicitly linked owned sites or existing monitors. Filters are workspace-scoped. Does not crawl, create a monitor, approve a host, schedule a check, or infer competitor traffic.',
@@ -196,6 +236,7 @@ const TOOLS: ToolDef[] = [
           enum: ['inbox', 'focus', 'watch', 'parked', 'discarded'],
           description: 'Optional manually assigned research lifecycle status',
         },
+        groupId: str('Optional root-term and major-category group id'),
         categoryId: str('Optional category id from get_competitor_categories'),
         siteId: str('Optional explicitly linked owned site id from list_sites'),
         monitorId: str(
@@ -213,6 +254,55 @@ const TOOLS: ToolDef[] = [
     },
     validateArgs: args => competitorResearchArgs.safeParse(args).success,
     request: args => ({ method: 'GET', path: competitorResearchReadPath(args) }),
+  },
+  {
+    name: 'import_competitor_research',
+    description:
+      'Save a completed, evidence-backed local Codex Skill result into the competitor research library. Use only after the named local Skill has completed. The caller must provide its Codex task URL and public-source evidence in rawInput. This does not run a local Skill, crawl a target, create a monitor, approve a host, or schedule a check.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceId: str('Workspace id from list_competitor_workspaces'),
+        rawInput: str(
+          'Completed local Skill output including a public HTTPS homepage URL and evidence URLs'
+        ),
+        primaryGroupId: str(
+          'Existing root-term and major-category group id that owns this research result'
+        ),
+        lifecycleStatus: {
+          type: 'string',
+          enum: ['inbox', 'focus', 'watch', 'parked', 'discarded'],
+          description: 'Optional initial manual research lifecycle status',
+        },
+        localCapabilityId: {
+          type: 'string',
+          enum: Object.keys(competitorResearchLocalCapabilityMetadata),
+          description: 'Local Skill that produced this completed evidence package',
+        },
+        sourceThreadUrl: str('Codex task URL that contains the local Skill run'),
+      },
+      required: [
+        'workspaceId',
+        'rawInput',
+        'primaryGroupId',
+        'localCapabilityId',
+        'sourceThreadUrl',
+      ],
+      additionalProperties: false,
+    },
+    validateArgs: args => competitorResearchImportArgs.safeParse(args).success,
+    request: args => ({
+      method: 'POST',
+      path: `/api/competitors/workspaces/${encodeURIComponent(String(args.workspaceId))}/research/intake`,
+      body: {
+        rawInput: args.rawInput,
+        lifecycleStatus: args.lifecycleStatus,
+        primaryGroupId: args.primaryGroupId,
+        researchMode: 'codex_local_handoff',
+        localCapabilityId: args.localCapabilityId,
+        sourceThreadUrl: args.sourceThreadUrl,
+      },
+    }),
   },
   {
     name: 'get_competitor_pre_research',
@@ -637,6 +727,7 @@ export function mcpHandler(dispatch: Dispatch) {
                 'get_competitor_monitors',
                 'get_competitor_history',
                 'get_competitor_categories',
+                'get_competitor_research_groups',
                 'get_competitor_pre_research',
                 'get_competitor_research',
                 'list_competitor_workspaces',
@@ -648,7 +739,15 @@ export function mcpHandler(dispatch: Dispatch) {
                       idempotentHint: true,
                     },
                   }
-                : {}),
+                : t.name === 'import_competitor_research'
+                  ? {
+                      annotations: {
+                        readOnlyHint: false,
+                        destructiveHint: false,
+                        idempotentHint: false,
+                      },
+                    }
+                  : {}),
             })),
           })
         );

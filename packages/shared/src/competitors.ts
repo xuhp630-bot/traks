@@ -2,6 +2,21 @@ import { z } from 'zod';
 
 export const competitorCadence = z.enum(['manual', 'daily', 'weekly']);
 export const competitorResearchStatus = z.enum(['inbox', 'focus', 'watch', 'parked', 'discarded']);
+export const competitorResearchIntakeMode = z.enum([
+  'pasted_site_research',
+  'codex_competitor_analysis',
+  'codex_local_handoff',
+]);
+export const competitorResearchLocalCapability = z.enum([
+  'competitor-analysis',
+  'competitor-profiling',
+  'assess-market-competition',
+  'competitive-battlecard',
+  '30x-seo-sitemap',
+  '30x-seo-technical',
+  '30x-seo-keywords',
+  'design-review',
+]);
 export const competitorPreResearchStage = z.enum(['imported', 'reviewing', 'verified', 'archived']);
 export const competitorPreResearchActionKind = z.enum([
   'harvest',
@@ -19,6 +34,12 @@ const competitorId = z
   .regex(/^[A-Za-z0-9_-]+$/);
 export const competitorCategoryInput = z
   .object({ name: z.string().trim().min(1).max(40) })
+  .strict();
+export const competitorResearchGroupInput = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    rootTerm: z.string().trim().min(1).max(120),
+  })
   .strict();
 export const competitorInput = z
   .object({
@@ -110,6 +131,7 @@ const competitorResearchFields = z
     pageTitle: z.string().trim().max(200).nullable().default(null),
     productSummary: z.string().trim().max(4000).nullable().default(null),
     lifecycleStatus: competitorResearchStatus.default('inbox'),
+    primaryGroupId: competitorId.nullable().default(null),
     seedKeywords: z.array(researchKeyword).max(50).default([]),
     paymentProviders: z.array(competitorResearchPayment).max(12).default([]),
     sources: z.array(competitorResearchSource).max(20).default([]),
@@ -118,6 +140,10 @@ const competitorResearchFields = z
   })
   .strict();
 export const competitorResearchInput = competitorResearchFields
+  .refine(value => Boolean(value.primaryGroupId), {
+    message: 'A root-term group is required for new research profiles',
+    path: ['primaryGroupId'],
+  })
   .refine(
     value =>
       distinctIds(value.seedKeywords.map(keyword => keyword.normalize('NFKC').toLowerCase())),
@@ -157,6 +183,7 @@ export const competitorResearchUpdate = competitorResearchFields
 export const competitorResearchFilters = z
   .object({
     lifecycleStatus: competitorResearchStatus.optional(),
+    groupId: competitorId.optional(),
     categoryId: competitorId.optional(),
     siteId: competitorId.optional(),
     monitorId: competitorId.optional(),
@@ -191,8 +218,26 @@ export const competitorResearchIntakeInput = z
   .object({
     rawInput: z.string().trim().min(20).max(12_000),
     lifecycleStatus: competitorResearchStatus.default('inbox'),
+    primaryGroupId: competitorId,
+    researchMode: competitorResearchIntakeMode.default('pasted_site_research'),
+    localCapabilityId: competitorResearchLocalCapability.nullable().default(null),
+    sourceThreadUrl: sourceReferenceUrl.nullable().default(null),
   })
-  .strict();
+  .strict()
+  .refine(
+    value => value.researchMode === 'pasted_site_research' || Boolean(value.sourceThreadUrl),
+    {
+      message: 'A Codex task URL is required for local research imports',
+      path: ['sourceThreadUrl'],
+    }
+  )
+  .refine(
+    value => value.researchMode !== 'codex_local_handoff' || Boolean(value.localCapabilityId),
+    {
+      message: 'A local capability id is required for local skill handoffs',
+      path: ['localCapabilityId'],
+    }
+  );
 export const competitorResearchLinksInput = z
   .object({ ids: z.array(competitorId).max(100).refine(distinctIds, 'Link ids must be unique') })
   .strict();
@@ -242,6 +287,8 @@ export type CompetitorResearchFilters = z.input<typeof competitorResearchFilters
 export type CompetitorResearchDraftInput = z.infer<typeof competitorResearchDraftInput>;
 export type CompetitorResearchStatus = z.infer<typeof competitorResearchStatus>;
 export type CompetitorResearchIntakeInput = z.infer<typeof competitorResearchIntakeInput>;
+export type CompetitorResearchIntakeMode = z.infer<typeof competitorResearchIntakeMode>;
+export type CompetitorResearchLocalCapability = z.infer<typeof competitorResearchLocalCapability>;
 export type CompetitorPreResearchStage = z.infer<typeof competitorPreResearchStage>;
 export type CompetitorPreResearchActionKind = z.infer<typeof competitorPreResearchActionKind>;
 export type CompetitorPreResearchOutcome = z.infer<typeof competitorPreResearchOutcome>;
@@ -252,11 +299,19 @@ export interface CompetitorCategory {
   monitorCount: number;
 }
 
+export interface CompetitorResearchGroup {
+  id: string;
+  name: string;
+  rootTerm: string;
+  profileCount: number;
+}
+
 export const COMPETITOR_LIMITS = {
   workspace: 100,
   site: 20,
   unlinked: 20,
   categories: 30,
+  researchGroups: 100,
   researchProfiles: 500,
   researchCategoryLinks: 30,
   researchSiteLinks: 100,
@@ -317,6 +372,8 @@ export interface CompetitorResearchSource {
 }
 
 export interface CompetitorResearchAnalysis {
+  researchMode?: CompetitorResearchIntakeMode;
+  localCapabilityId?: CompetitorResearchLocalCapability | null;
   provider: 'glm' | 'terra';
   model: string;
   generatedAt: number;
@@ -341,6 +398,7 @@ export interface CompetitorResearchProfile {
   notes: string | null;
   rawInput: string | null;
   analysis: CompetitorResearchAnalysis | null;
+  primaryGroup: Pick<CompetitorResearchGroup, 'id' | 'name' | 'rootTerm'> | null;
   createdAt: number;
   updatedAt: number;
   categories: Pick<CompetitorCategory, 'id' | 'name'>[];
@@ -378,13 +436,51 @@ export interface CompetitorResearchDraft {
 }
 
 export interface CompetitorResearchIntakeResult {
-  source: 'pasted_site_research';
+  source: CompetitorResearchIntakeMode;
   profileId: string;
   provider: 'glm' | 'terra';
   model: string;
   savedAt: number;
   limitations: string[];
 }
+
+export const competitorResearchLocalCapabilityMetadata: Record<
+  CompetitorResearchLocalCapability,
+  { label: string; description: string }
+> = {
+  'competitor-analysis': {
+    label: '竞品分析',
+    description: '市场范围、竞品集合、定位、定价与差异化机会。',
+  },
+  'competitor-profiling': {
+    label: '竞品档案',
+    description: '基于公开来源的产品、定价、SEO 与市场档案。',
+  },
+  'assess-market-competition': {
+    label: '市场竞争评估',
+    description: '饱和度、进入壁垒、竞争等级与下一步验证。',
+  },
+  'competitive-battlecard': {
+    label: '竞争战卡',
+    description: '与己方产品对比的销售定位、异议与竞争策略。',
+  },
+  '30x-seo-sitemap': {
+    label: '竞品 Sitemap 审计',
+    description: '公开 sitemap、发现面与 URL 结构证据。',
+  },
+  '30x-seo-technical': {
+    label: '竞品技术 SEO 审计',
+    description: '可抓取性、索引、渲染、性能与结构化数据证据。',
+  },
+  '30x-seo-keywords': {
+    label: '竞品关键词研究',
+    description: '种子词、需求、难度与内容缺口的外部数据结果。',
+  },
+  'design-review': {
+    label: '竞品体验评审',
+    description: '公开界面的层级、一致性、可用性与可访问性观察。',
+  },
+};
 
 export interface CompetitorResearchReport {
   source: 'manual_research_library';

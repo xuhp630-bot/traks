@@ -33,6 +33,7 @@ import {
 let runtime: Miniflare;
 let database: Bindings['DB'];
 let env: Bindings;
+let defaultResearchGroupId: string | null = null;
 const instant = Date.UTC(2026, 8, 1);
 const snapshot: CompetitorSnapshot = {
   title: 'Fixture plan',
@@ -177,9 +178,11 @@ after(async () => {
   await runtime?.dispose();
 });
 beforeEach(async () => {
+  defaultResearchGroupId = null;
   await database.prepare('DELETE FROM competitor_pre_research_actions').run();
   await database.prepare('DELETE FROM competitor_pre_research_runs').run();
   await database.prepare('DELETE FROM competitor_research_profiles').run();
+  await database.prepare('DELETE FROM competitor_research_groups').run();
   await database.prepare('DELETE FROM competitor_monitors').run();
   await database.prepare('DELETE FROM competitor_categories').run();
 });
@@ -646,21 +649,61 @@ test('API records disallowed checks without network access, prevents edit/delete
   assert.deepEqual(await competitorHistory(database, 'pending'), []);
 });
 
-test('MCP competitor tools are scoped read-only views and never start a check', async () => {
+test('MCP competitor read tools remain scoped and a local Skill import is explicit', async () => {
   await monitor();
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
   const list = await (
     await request('/api/mcp', 'POST', { jsonrpc: '2.0', id: 1, method: 'tools/list' }, 'reader')
   ).json();
   const tools = list.result.tools.filter(tool => tool.name.includes('competitor'));
-  assert.deepEqual(tools.map(tool => tool.name).sort(), [
+  const readTools = tools.filter(
+    tool => tool.name.startsWith('get_') || tool.name === 'list_competitor_workspaces'
+  );
+  assert.deepEqual(readTools.map(tool => tool.name).sort(), [
     'get_competitor_categories',
     'get_competitor_history',
     'get_competitor_monitors',
     'get_competitor_pre_research',
     'get_competitor_research',
+    'get_competitor_research_groups',
     'list_competitor_workspaces',
   ]);
-  assert.ok(tools.every(tool => tool.annotations.readOnlyHint));
+  assert.ok(readTools.every(tool => tool.annotations.readOnlyHint));
+  const importer = tools.find(tool => tool.name === 'import_competitor_research');
+  assert.deepEqual(importer?.annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  });
+  assert.deepEqual(importer?.inputSchema.required, [
+    'workspaceId',
+    'rawInput',
+    'primaryGroupId',
+    'localCapabilityId',
+    'sourceThreadUrl',
+  ]);
+  const groupsResult = await (
+    await request(
+      '/api/mcp',
+      'POST',
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'get_competitor_research_groups', arguments: { workspaceId: 'workspace' } },
+      },
+      'reader'
+    )
+  ).json();
+  assert.equal(groupsResult.result.isError, false);
+  assert.deepEqual(JSON.parse(groupsResult.result.content[0].text).data.groups, [
+    {
+      id: primaryGroupId,
+      name: 'Developer tools',
+      rootTerm: 'developer tools',
+      profileCount: 0,
+    },
+  ]);
   for (const [name, argumentsValue] of [
     ['get_competitor_monitors', { siteId: 'site' }],
     ['get_competitor_history', { siteId: 'site', monitorId: 'monitor' }],
@@ -697,6 +740,57 @@ test('MCP competitor tools are scoped read-only views and never start a check', 
     ).json();
     assert.equal(result.result.isError, true);
   }
+  const importArguments = {
+    workspaceId: 'workspace',
+    rawInput: `${intakeInput.rawInput}\nEvidence: https://tools.promptspace.in/pricing`,
+    primaryGroupId,
+    localCapabilityId: 'competitor-analysis',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+  };
+  const deniedImport = await (
+    await request(
+      '/api/mcp',
+      'POST',
+      {
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: { name: 'import_competitor_research', arguments: importArguments },
+      },
+      'reader'
+    )
+  ).json();
+  assert.equal(deniedImport.result.isError, true);
+  const imported = await (
+    await request('/api/mcp', 'POST', {
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: { name: 'import_competitor_research', arguments: importArguments },
+    })
+  ).json();
+  assert.equal(imported.result.isError, false);
+  const researchResult = await (
+    await request(
+      '/api/mcp',
+      'POST',
+      {
+        jsonrpc: '2.0',
+        id: 6,
+        method: 'tools/call',
+        params: {
+          name: 'get_competitor_research',
+          arguments: { workspaceId: 'workspace', groupId: primaryGroupId },
+        },
+      },
+      'reader'
+    )
+  ).json();
+  assert.equal(researchResult.result.isError, false);
+  assert.equal(JSON.parse(researchResult.result.content[0].text).data.profiles.length, 1);
+  const research = (await (await request(`${workspaceRoot}/research`)).json()).data;
+  assert.equal(research.profiles[0].analysis.researchMode, 'codex_local_handoff');
+  assert.equal(research.profiles[0].analysis.localCapabilityId, 'competitor-analysis');
   assert.deepEqual(await competitorHistory(database, 'monitor'), []);
 });
 
@@ -785,6 +879,11 @@ async function category(name = 'AI tools') {
   assert.equal(response.status, 201);
   return (await response.json()).data.id as string;
 }
+async function researchGroup(name = 'Research fixture', rootTerm = 'research fixture') {
+  const response = await request(`${workspaceRoot}/research/groups`, 'POST', { name, rootTerm });
+  assert.equal(response.status, 201);
+  return (await response.json()).data.id as string;
+}
 async function independent(extra: object = {}) {
   const response = await request(workspaceRoot, 'POST', {
     name: 'Independent',
@@ -795,18 +894,23 @@ async function independent(extra: object = {}) {
   return (await response.json()).data.id as string;
 }
 
-async function researchProfile(extra: object = {}) {
+async function researchProfile(extra: Record<string, unknown> = {}) {
+  const { primaryGroupId: suppliedPrimaryGroupId, ...profile } = extra;
+  if (!defaultResearchGroupId)
+    defaultResearchGroupId = await researchGroup('Research fixture', 'research fixture');
+  const primaryGroupId = suppliedPrimaryGroupId ?? defaultResearchGroupId;
   const response = await request(`${workspaceRoot}/research`, 'POST', {
     brandName: 'OpenSourceGen',
     homepageUrl: 'https://fixture.example.com/research',
     productSummary: 'Synthetic manual research only',
     lifecycleStatus: 'inbox',
+    primaryGroupId,
     seedKeywords: ['AI image generator'],
     paymentProviders: [],
     sources: [],
     sourceThreadUrl: null,
     notes: null,
-    ...extra,
+    ...profile,
   });
   assert.equal(response.status, 201);
   return (await response.json()).data.id as string;
@@ -892,7 +996,8 @@ test('AI research intake accepts GLM-compatible JSON response variants', async (
     brandName: 'BrandGene',
     pageTitle: '',
     productSummary: '',
-    detailedAnalysis: '产品类别与定位：基于粘贴内容分析。\n\n待补证据：支付和定价信息需要人工核验。',
+    detailedAnalysis:
+      '产品类别与定位：基于粘贴内容分析。\n\n待补证据：支付和定价信息需要人工核验。',
     suggestedCategories: ['AI 品牌工具'],
     seedKeywords: ['AI brand generator'],
     paymentProviders: [],
@@ -937,15 +1042,28 @@ test('AI research intake classifies an upstream length stop without saving a par
 });
 
 test('pasted research intake saves source and detailed analysis without creating a monitor', async () => {
-  const response = await request(`${workspaceRoot}/research/intake`, 'POST', intakeInput);
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const response = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+  });
   assert.equal(response.status, 201);
   const created = (await response.json()).data;
   assert.equal(created.source, 'pasted_site_research');
   assert.equal(created.provider, 'glm');
   const report = (await (await request(`${workspaceRoot}/research`)).json()).data;
   assert.equal(report.profiles.length, 1);
+  assert.deepEqual(report.profiles[0].primaryGroup, {
+    id: primaryGroupId,
+    name: 'Developer tools',
+    rootTerm: 'developer tools',
+  });
+  assert.deepEqual(report.profiles[0].categories, []);
   assert.equal(report.profiles[0].rawInput, intakeInput.rawInput);
-  assert.equal(report.profiles[0].analysis.detailedAnalysis, '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。');
+  assert.equal(
+    report.profiles[0].analysis.detailedAnalysis,
+    '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。'
+  );
   assert.equal('modelMetadata' in report.profiles[0].analysis, false);
   assert.equal(
     (
@@ -955,6 +1073,43 @@ test('pasted research intake saves source and detailed analysis without creating
         .first<{ count: number }>()
     )?.count,
     0
+  );
+});
+
+test('Codex deep research import requires its task link and preserves listed public evidence', async () => {
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const missingTask = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+    researchMode: 'codex_competitor_analysis',
+  });
+  assert.equal(missingTask.status, 400);
+
+  const response = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+    rawInput: `${intakeInput.rawInput}\nEvidence: https://tools.promptspace.in/pricing`,
+    researchMode: 'codex_competitor_analysis',
+    sourceThreadUrl: 'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
+  });
+  assert.equal(response.status, 201);
+  const created = (await response.json()).data;
+  assert.equal(created.source, 'codex_competitor_analysis');
+  const report = (await (await request(`${workspaceRoot}/research`)).json()).data;
+  assert.equal(report.profiles[0].analysis.researchMode, 'codex_competitor_analysis');
+  assert.equal(
+    report.profiles[0].sourceThreadUrl,
+    'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7'
+  );
+  assert.deepEqual(
+    report.profiles[0].sources.map((source: { url: string; kind: string }) => [
+      source.url,
+      source.kind,
+    ]),
+    [
+      ['https://tools.promptspace.in/', 'landing'],
+      ['https://tools.promptspace.in/pricing', 'pricing'],
+    ]
   );
 });
 
@@ -1027,8 +1182,11 @@ test('category rename/delete and same-workspace reassignment preserve all eviden
   await checkCompetitor(env, id, { workspaceId: 'workspace' }, success, instant);
   const before = await competitorHistory(database, id);
   assert.equal(
-    (await request(`${workspaceRoot}/categories/${categoryId}`, 'PATCH', { name: 'AI video' }))
-      .status,
+    (
+      await request(`${workspaceRoot}/categories/${categoryId}`, 'PATCH', {
+        name: 'AI video',
+      })
+    ).status,
     200
   );
   for (const siteId of ['site', 'other-site', null]) {
@@ -1223,6 +1381,61 @@ test('research library keeps manual evidence workspace-scoped and only links an 
   );
 });
 
+test('research profiles keep a root-term group as their result parent while categories remain tags', async () => {
+  const initialGroupId = await researchGroup('AI image prompt tools', 'image to prompt');
+  const nextGroupId = await researchGroup('AI image generation tools', 'AI image generator');
+  const categoryId = await category('Freemium tools');
+  const profileId = await researchProfile({ primaryGroupId: initialGroupId });
+
+  const firstReport = (
+    await (await request(`${workspaceRoot}/research?groupId=${initialGroupId}`)).json()
+  ).data;
+  assert.deepEqual(
+    firstReport.profiles.map((profile: { id: string }) => profile.id),
+    [profileId]
+  );
+  assert.deepEqual(firstReport.profiles[0].primaryGroup, {
+    id: initialGroupId,
+    name: 'AI image prompt tools',
+    rootTerm: 'image to prompt',
+  });
+
+  assert.equal(
+    (
+      await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {
+        primaryGroupId: nextGroupId,
+      })
+    ).status,
+    200
+  );
+  assert.equal(
+    (
+      await request(`${workspaceRoot}/research/${profileId}/categories`, 'PUT', {
+        ids: [categoryId],
+      })
+    ).status,
+    200
+  );
+  const reassigned = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(reassigned.primaryGroup.id, nextGroupId);
+  assert.deepEqual(
+    reassigned.categories.map((item: { id: string }) => item.id),
+    [categoryId]
+  );
+
+  assert.equal(
+    (await request(`${workspaceRoot}/research/groups/${nextGroupId}`, 'DELETE')).status,
+    200
+  );
+  const legacy = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(legacy.primaryGroup, null);
+  assert.deepEqual(
+    legacy.categories.map((item: { id: string }) => item.id),
+    [categoryId]
+  );
+  assert.equal((await request(`${workspaceRoot}/research?groupId=${nextGroupId}`)).status, 404);
+});
+
 test('research library paginates saved intake metadata without creating monitors', async () => {
   for (let index = 0; index < 10; index++) {
     await researchProfile({
@@ -1415,6 +1628,7 @@ test('research profiles reject foreign links, write attempts from non-owners and
       await request(`${workspaceRoot}/research`, 'POST', {
         brandName: 'Duplicate',
         homepageUrl: 'https://fixture.example.com/research',
+        primaryGroupId: defaultResearchGroupId,
         seedKeywords: [],
         paymentProviders: [],
         sources: [],
@@ -1431,6 +1645,7 @@ test('research profiles reject foreign links, write attempts from non-owners and
         {
           brandName: 'Blocked',
           homepageUrl: 'https://fixture.example.com/blocked',
+          primaryGroupId: defaultResearchGroupId,
           seedKeywords: [],
           paymentProviders: [],
           sources: [],
@@ -1465,11 +1680,13 @@ test('research profile limit and cascade cleanup protect bounded D1 metadata sto
         )
     )
   );
+  const primaryGroupId = await researchGroup('Research limit', 'research limit');
   assert.equal(
     (
       await request(`${workspaceRoot}/research`, 'POST', {
         brandName: 'One too many',
         homepageUrl: 'https://fixture.example.com/research-overflow',
+        primaryGroupId,
         seedKeywords: [],
         paymentProviders: [],
         sources: [],
@@ -1509,7 +1726,11 @@ test('normalized categories, URL uniqueness and concurrent limits cannot be bypa
   );
   const nextCategory = await category('Different');
   assert.equal(
-    (await request(`${workspaceRoot}/categories/${nextCategory}`, 'PATCH', { name: 'Ai' })).status,
+    (
+      await request(`${workspaceRoot}/categories/${nextCategory}`, 'PATCH', {
+        name: 'Ai',
+      })
+    ).status,
     409
   );
   const responses = await Promise.all(
@@ -1718,7 +1939,9 @@ test('workspace MCP discovers scoped categories, filters evidence and rejects ma
 
 test('workspace categories support independent competitors and intersect with owned-site filters', async () => {
   const root = '/api/competitors/workspaces/workspace';
-  const createdCategory = await request(`${root}/categories`, 'POST', { name: 'AI 视频' });
+  const createdCategory = await request(`${root}/categories`, 'POST', {
+    name: 'AI 视频',
+  });
   assert.equal(createdCategory.status, 201);
   const categoryId = (await createdCategory.json()).data.id;
   const independent = await request(root, 'POST', {

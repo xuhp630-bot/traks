@@ -5,6 +5,7 @@ import { createId } from '@paralleldrive/cuid2';
 import {
   workspaceCompetitorInput,
   competitorCategoryInput,
+  competitorResearchGroupInput,
   competitorFilters,
   competitorUpdate,
   competitorResearchFilters,
@@ -36,10 +37,12 @@ import {
   type CompetitorScope,
 } from '../lib/competitors';
 import {
+  competitorResearchGroups,
   competitorResearchReport,
   replaceResearchCategoryLinks,
   replaceResearchMonitorLinks,
   replaceResearchSiteLinks,
+  researchGroupExists,
   researchProfileExists,
 } from '../lib/competitor-research';
 import {
@@ -123,6 +126,17 @@ async function validateReferences(
   return null;
 }
 
+async function validateResearchGroup(
+  c: Ctx,
+  workspaceId: string | null,
+  groupId: string | null
+): Promise<Response | null> {
+  if (!groupId) return null;
+  if (!(await researchGroupExists(c.env.DB, workspaceId!, groupId)))
+    return c.json({ error: 'Root-term group not found in this workspace' }, 404);
+  return null;
+}
+
 async function createMonitor(
   c: Ctx,
   scope: Access,
@@ -188,6 +202,8 @@ async function validateResearchFilters(
   workspaceId: string,
   filters: z.infer<typeof competitorResearchFilters>
 ): Promise<Response | null> {
+  const group = await validateResearchGroup(c, workspaceId, filters.groupId ?? null);
+  if (group) return group;
   const category = await validateReferences(c, workspaceId, null, filters.categoryId ?? null);
   if (category) return category;
   const site = await validateReferences(c, workspaceId, filters.siteId ?? null, null);
@@ -243,6 +259,37 @@ function pastedResearchUrl(rawInput: string): string | null {
   const candidate =
     labeled?.match(/https?:\/\/[^\s)\]>]+/)?.[0] ?? rawInput.match(/https?:\/\/[^\s)\]>]+/)?.[0];
   return candidate?.replace(/[.,;]+$/, '') ?? null;
+}
+
+function researchSources(rawInput: string, homepageUrl: URL, researchMode: string) {
+  const urls = [homepageUrl.href];
+  for (const match of rawInput.matchAll(/https?:\/\/[^\s)\]>"']+/gi)) {
+    const candidate = match[0].replace(/[.,;]+$/, '');
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === 'https:' || url.protocol === 'http:') urls.push(url.href);
+    } catch {
+      continue;
+    }
+  }
+  return [...new Set(urls)].slice(0, 20).map(url => {
+    const pathname = new URL(url).pathname.toLowerCase();
+    const kind = /checkout|billing|payment/.test(pathname)
+      ? 'checkout'
+      : /pricing|plan/.test(pathname)
+        ? 'pricing'
+        : url === homepageUrl.href
+          ? 'landing'
+          : 'manual';
+    return {
+      url,
+      kind,
+      note:
+        researchMode !== 'pasted_site_research'
+          ? '来自 Codex 深度研究导入，未由 Traks 抓取。'
+          : '用户粘贴的网站资料，未自动抓取。',
+    };
+  });
 }
 
 function providerFailureDetail(
@@ -361,8 +408,86 @@ function preResearchRoutes() {
     });
 }
 
+function researchGroupRoutes() {
+  return new Hono<{ Bindings: Bindings; Variables: Variables }>()
+    .get('/', async c => {
+      const scope = await access(c);
+      if (scope instanceof Response) return scope;
+      return c.json({
+        data: {
+          workspaceId: scope.workspaceId,
+          canManage: scope.canManage,
+          groups: await competitorResearchGroups(c.env.DB, scope.workspaceId!),
+          limit: COMPETITOR_LIMITS.researchGroups,
+        },
+      });
+    })
+    .post('/', validate('json', competitorResearchGroupInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const { name, rootTerm } = c.req.valid('json');
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_research_groups (id,workspace_id,name,name_key,root_term,root_term_key,created_at) SELECT ?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_research_groups WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+      )
+        .bind(
+          id,
+          scope.workspaceId,
+          name,
+          name.normalize('NFKC').toLowerCase(),
+          rootTerm,
+          rootTerm.normalize('NFKC').toLowerCase(),
+          Date.now(),
+          scope.workspaceId,
+          COMPETITOR_LIMITS.researchGroups
+        )
+        .first();
+      if (!created)
+        return c.json({ error: 'Duplicate root-term group or 100-group limit reached' }, 409);
+      return c.json({ data: { id } }, 201);
+    })
+    .patch('/:groupId', validate('json', competitorResearchGroupInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const { name, rootTerm } = c.req.valid('json');
+      const id = c.req.param('groupId');
+      const nameKey = name.normalize('NFKC').toLowerCase();
+      const rootTermKey = rootTerm.normalize('NFKC').toLowerCase();
+      const result = await c.env.DB.prepare(
+        'UPDATE competitor_research_groups SET name = ?, name_key = ?, root_term = ?, root_term_key = ? WHERE id = ? AND workspace_id = ? AND NOT EXISTS (SELECT 1 FROM competitor_research_groups WHERE workspace_id = ? AND root_term_key = ? AND name_key = ? AND id != ?) RETURNING id'
+      )
+        .bind(
+          name,
+          nameKey,
+          rootTerm,
+          rootTermKey,
+          id,
+          scope.workspaceId,
+          scope.workspaceId,
+          rootTermKey,
+          nameKey,
+          id
+        )
+        .first();
+      if (!result) return c.json({ error: 'Root-term group missing or duplicate' }, 409);
+      return c.json({ data: result });
+    })
+    .delete('/:groupId', async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const result = await c.env.DB.prepare(
+        'DELETE FROM competitor_research_groups WHERE id = ? AND workspace_id = ? RETURNING id'
+      )
+        .bind(c.req.param('groupId'), scope.workspaceId)
+        .first();
+      if (!result) return c.json({ error: 'Root-term group not found' }, 404);
+      return c.json({ data: result });
+    });
+}
+
 function researchRoutes() {
   return new Hono<{ Bindings: Bindings; Variables: Variables }>()
+    .route('/groups', researchGroupRoutes())
     .route('/pre-research', preResearchRoutes())
     .post('/draft', validate('json', competitorResearchDraftInput), async c => {
       const scope = await access(c, true);
@@ -395,6 +520,8 @@ function researchRoutes() {
       const scope = await access(c, true);
       if (scope instanceof Response) return scope;
       const body = c.req.valid('json');
+      const invalidGroup = await validateResearchGroup(c, scope.workspaceId, body.primaryGroupId);
+      if (invalidGroup) return invalidGroup;
       const rawUrl = pastedResearchUrl(body.rawInput);
       if (!rawUrl) return c.json({ error: 'Pasted research must include a public HTTPS URL' }, 400);
       let url: URL;
@@ -417,7 +544,7 @@ function researchRoutes() {
         );
       const id = createId();
       const created = await c.env.DB.prepare(
-        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,seed_keywords,payment_providers,sources,raw_input,analysis,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,primary_group_id,seed_keywords,payment_providers,sources,source_thread_url,raw_input,analysis,created_at,updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
       )
         .bind(
           id,
@@ -428,13 +555,17 @@ function researchRoutes() {
           generated.data.draft.pageTitle,
           generated.data.draft.productSummary,
           body.lifecycleStatus,
+          body.primaryGroupId,
           JSON.stringify(generated.data.draft.seedKeywords),
           JSON.stringify(generated.data.draft.paymentProviders),
-          JSON.stringify([
-            { url: url.href, kind: 'landing', note: '用户粘贴的网站资料，未自动抓取。' },
-          ]),
+          JSON.stringify(researchSources(body.rawInput, url, body.researchMode)),
+          body.sourceThreadUrl,
           body.rawInput,
           JSON.stringify({
+            researchMode: body.researchMode,
+            localCapabilityId:
+              body.localCapabilityId ??
+              (body.researchMode === 'codex_competitor_analysis' ? 'competitor-analysis' : null),
             provider: generated.data.provider,
             model: generated.data.model,
             generatedAt: generated.data.generatedAt,
@@ -456,13 +587,15 @@ function researchRoutes() {
       return c.json(
         {
           data: {
-            source: 'pasted_site_research',
+            source: body.researchMode,
             profileId: id,
             provider: generated.data.provider,
             model: generated.data.model,
             savedAt: generated.data.generatedAt,
             limitations: [
-              'Only the text pasted in this form was analyzed and saved; no target website was fetched.',
+              body.researchMode !== 'pasted_site_research'
+                ? 'Only the Codex research text and its listed public source URLs were imported; Traks did not fetch the target website.'
+                : 'Only the text pasted in this form was analyzed and saved; no target website was fetched.',
               'Suggested categories and payment evidence remain unverified until manually reviewed.',
               'No competitor monitor or scheduler was created.',
             ],
@@ -490,6 +623,10 @@ function researchRoutes() {
       const scope = await access(c, true);
       if (scope instanceof Response) return scope;
       const body = c.req.valid('json');
+      if (!body.primaryGroupId)
+        return c.json({ error: 'A root-term group is required for new research profiles' }, 400);
+      const invalidGroup = await validateResearchGroup(c, scope.workspaceId, body.primaryGroupId);
+      if (invalidGroup) return invalidGroup;
       let url: URL;
       try {
         url = publicPageUrl(body.homepageUrl);
@@ -502,7 +639,7 @@ function researchRoutes() {
       const now = Date.now();
       const id = createId();
       const created = await c.env.DB.prepare(
-        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,seed_keywords,payment_providers,sources,source_thread_url,notes,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,primary_group_id,seed_keywords,payment_providers,sources,source_thread_url,notes,created_at,updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
       )
         .bind(
           id,
@@ -513,6 +650,7 @@ function researchRoutes() {
           body.pageTitle,
           body.productSummary,
           body.lifecycleStatus,
+          body.primaryGroupId,
           JSON.stringify(body.seedKeywords),
           JSON.stringify(body.paymentProviders),
           JSON.stringify(body.sources),
@@ -538,11 +676,19 @@ function researchRoutes() {
       if (!(await researchProfileExists(c.env.DB, scope.workspaceId!, id)))
         return c.json({ error: 'Research profile not found' }, 404);
       const body = c.req.valid('json');
+      if (body.primaryGroupId !== undefined) {
+        const invalidGroup = await validateResearchGroup(c, scope.workspaceId, body.primaryGroupId);
+        if (invalidGroup) return invalidGroup;
+      }
       const assignments: string[] = [];
       const values: (string | number | null)[] = [];
       if (body.brandName !== undefined) {
         assignments.push('brand_name = ?');
         values.push(body.brandName);
+      }
+      if (body.primaryGroupId !== undefined) {
+        assignments.push('primary_group_id = ?');
+        values.push(body.primaryGroupId);
       }
       if (body.homepageUrl !== undefined) {
         let url: URL;

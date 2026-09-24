@@ -23,8 +23,12 @@ import type {
   CompetitorPreResearchStage,
   CompetitorResearchProfile,
   CompetitorResearchDraft,
+  CompetitorResearchGroup,
+  CompetitorResearchIntakeMode,
+  CompetitorResearchLocalCapability,
   CompetitorResearchStatus,
 } from '@traks/shared';
+import { competitorResearchLocalCapabilityMetadata } from '@traks/shared';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
@@ -60,6 +64,12 @@ const researchStatusLabels: Record<CompetitorResearchStatus, string> = {
   parked: '暂缓',
   discarded: '放弃',
 };
+const localCapabilityLabel = (
+  capabilityId: CompetitorResearchLocalCapability | null | undefined
+): string | null =>
+  capabilityId ? competitorResearchLocalCapabilityMetadata[capabilityId]?.label : null;
+const isLocalSkillHandoff = (researchMode: CompetitorResearchIntakeMode | undefined): boolean =>
+  researchMode === 'codex_competitor_analysis' || researchMode === 'codex_local_handoff';
 const preResearchStageLabels: Record<CompetitorPreResearchStage, string> = {
   imported: '已导入',
   reviewing: '分析中',
@@ -111,7 +121,7 @@ function CompetitorsPage(): ReactElement {
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-[#6F6D7A]">
             {view === 'research'
-              ? '先归档预调研与人工结论，再按需要手动建立监控。分析不会自动读取目标站或启动调度。'
+              ? '先建立“分类 + 裂变词根”，再归档预调研与人工结论；每条结果都归属一个分类。分析不会自动读取目标站或启动调度。'
               : '仅查看公开页面的受控变化记录。监控不等于竞品流量、客户或转化数据。'}
           </p>
         </div>
@@ -183,7 +193,7 @@ function ResearchPanel({
       <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6">
         <h2 className="text-lg font-semibold text-[#3D3B4F]">先粘贴资料预调研，再决定是否监控</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6D7A]">
-          粘贴公开网站资料即可生成并保存详细研究档案；也可导入 Keyword Harvester
+          先为词根建立分类，再粘贴公开网站资料生成并保存详细研究档案；也可导入 Keyword Harvester
           任务摘要与行动路径。所有分类、关联和监控均需人工确认，不会自动读取目标网站或启动调度。
         </p>
       </section>
@@ -763,8 +773,8 @@ function CategoryManager({
         </span>
       </summary>
       <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
-        例如 AI 视频、SEO
-        工具。分类数和每类页数统计整个工作区；删除分类仅变为“未分类”，不会删除监控或历史。
+        分类用于监控和研究的细分标签，例如 AI 视频、SEO
+        工具。删除分类只会移除细分标签，不会删除监控、研究档案或历史。
       </p>
       <form onSubmit={event => void create(event)} className="mt-4">
         <fieldset
@@ -1422,12 +1432,20 @@ function ResearchLibrary({
 }): ReactElement {
   const client = useQueryClient();
   const [filter, setFilter] = useState<CompetitorResearchStatus | ''>('');
+  const [groupFilterId, setGroupFilterId] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<10 | 20>(10);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [rawInput, setRawInput] = useState('');
   const [intakeStatus, setIntakeStatus] = useState<CompetitorResearchStatus>('inbox');
-  const [newCategoryName, setNewCategoryName] = useState('');
+  const [intakeMode, setIntakeMode] =
+    useState<CompetitorResearchIntakeMode>('pasted_site_research');
+  const [intakeCapabilityId, setIntakeCapabilityId] =
+    useState<CompetitorResearchLocalCapability>('competitor-analysis');
+  const [intakeSourceThreadUrl, setIntakeSourceThreadUrl] = useState('');
+  const [primaryGroupId, setPrimaryGroupId] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupRootTerm, setNewGroupRootTerm] = useState('');
   const [brandName, setBrandName] = useState('');
   const [homepageUrl, setHomepageUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
@@ -1441,10 +1459,11 @@ function ResearchLibrary({
   const [notice, setNotice] = useState('');
   const [generatedDraft, setGeneratedDraft] = useState<CompetitorResearchDraft | null>(null);
   const research = useQuery({
-    queryKey: ['competitor-research', workspaceId, filter, page, pageSize],
+    queryKey: ['competitor-research', workspaceId, filter, groupFilterId, page, pageSize],
     queryFn: () =>
       api.getCompetitorResearch(workspaceId, {
         ...(filter ? { lifecycleStatus: filter } : {}),
+        ...(groupFilterId ? { groupId: groupFilterId } : {}),
         page,
         pageSize,
       }),
@@ -1452,6 +1471,10 @@ function ResearchLibrary({
   const monitors = useQuery({
     queryKey: ['competitors', workspaceId, 'research-link-options'],
     queryFn: () => api.getCompetitors({ workspaceId }),
+  });
+  const researchGroups = useQuery({
+    queryKey: ['competitor-research-groups', workspaceId],
+    queryFn: () => api.getCompetitorResearchGroups(workspaceId),
   });
   const mutation = useMutation({
     mutationFn: (action: ResearchAction) =>
@@ -1488,25 +1511,45 @@ function ResearchLibrary({
       api.intakeCompetitorResearch(workspaceId, {
         rawInput,
         lifecycleStatus: intakeStatus,
+        primaryGroupId,
+        researchMode: intakeMode,
+        localCapabilityId: intakeMode === 'codex_local_handoff' ? intakeCapabilityId : null,
+        sourceThreadUrl:
+          intakeMode !== 'pasted_site_research' ? intakeSourceThreadUrl || null : null,
       }),
     onSuccess: result => {
       setRawInput('');
+      setIntakeSourceThreadUrl('');
       setFilter(intakeStatus);
       setPage(1);
       setSelectedProfileId(result.data.profileId);
-      setNotice(`已由 ${result.data.model} 分析并保存完整预调研记录，尚未创建监控。`);
+      setNotice(
+        result.data.source !== 'pasted_site_research'
+          ? '已导入本地 Skill 研究并保存完整预调研记录，尚未创建监控。'
+          : `已由 ${result.data.model} 分析并保存完整预调研记录，尚未创建监控。`
+      );
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
   });
-  const categoryMutation = useMutation({
+  const groupMutation = useMutation({
     mutationFn: () =>
-      api.mutateCompetitor({ workspaceId }, '/categories', 'POST', { name: newCategoryName }),
-    onSuccess: () => {
-      setNewCategoryName('');
-      void client.invalidateQueries({ queryKey: ['competitor-categories', workspaceId] });
+      api.mutateCompetitor({ workspaceId }, '/research/groups', 'POST', {
+        name: newGroupName,
+        rootTerm: newGroupRootTerm,
+      }),
+    onSuccess: result => {
+      setNewGroupName('');
+      setNewGroupRootTerm('');
+      const id = (result as { data?: { id?: string } }).data?.id;
+      if (id) setPrimaryGroupId(id);
+      void client.invalidateQueries({ queryKey: ['competitor-research-groups', workspaceId] });
     },
   });
   const generateDraft = async (): Promise<void> => {
+    if (!primaryGroupId) {
+      setNotice('请先选择或新建“词根 + 大分类”，再生成分析。');
+      return;
+    }
     if (!homepageUrl.trim()) {
       setNotice('请先填写公开 HTTPS URL，再生成草稿。');
       return;
@@ -1540,6 +1583,7 @@ function ResearchLibrary({
           pageTitle: pageTitle || null,
           productSummary: summary || null,
           lifecycleStatus: newStatus,
+          primaryGroupId,
           seedKeywords: splitList(keywords),
           paymentProviders: parsePaymentProviders(payments),
           sources: splitList(sources).map(url => ({ url, kind: 'manual' })),
@@ -1564,6 +1608,10 @@ function ResearchLibrary({
   };
   const saveIntake = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
+    if (!primaryGroupId) {
+      setNotice('请先选择或新建“词根 + 大分类”，再开始分析。');
+      return;
+    }
     if (!rawInput.trim()) return;
     try {
       await intakeMutation.mutateAsync();
@@ -1571,16 +1619,32 @@ function ResearchLibrary({
       return;
     }
   };
-  const createCategory = async (event: FormEvent): Promise<void> => {
+  const createGroup = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (!newCategoryName.trim()) return;
+    if (!newGroupName.trim() || !newGroupRootTerm.trim()) return;
     try {
-      await categoryMutation.mutateAsync();
+      await groupMutation.mutateAsync();
     } catch {
       return;
     }
   };
   const profiles = research.data?.data.profiles ?? [];
+  const rootTermGroups = researchGroups.data?.data.groups ?? [];
+  const selectedRootTermGroup = rootTermGroups.find(group => group.id === primaryGroupId);
+  const profileGroups = Array.from(
+    profiles
+      .reduce((groups, profile) => {
+        const key = profile.primaryGroup?.id ?? 'legacy-unclassified';
+        const group = groups.get(key) ?? {
+          rootTermGroup: profile.primaryGroup,
+          profiles: [] as CompetitorResearchProfile[],
+        };
+        group.profiles.push(profile);
+        groups.set(key, group);
+        return groups;
+      }, new Map<string, { rootTermGroup: CompetitorResearchProfile['primaryGroup']; profiles: CompetitorResearchProfile[] }>())
+      .values()
+  );
   const selectedProfile =
     profiles.find(profile => profile.id === selectedProfileId) ?? profiles[0] ?? null;
   const canManage = research.data?.data.canManage ?? false;
@@ -1597,25 +1661,47 @@ function ResearchLibrary({
             保存人工确认的品牌、产品定位、种子词、支付结论与来源。研究档案不会自动创建监控、读取目标网页或启用调度；先手动添加监控，再显式关联。
           </p>
         </div>
-        <label className="min-w-40 text-xs">
-          处理状态
-          <select
-            aria-label="筛选研究状态"
-            className={`${controlClass} mt-2`}
-            value={filter}
-            onChange={event => {
-              setFilter(event.target.value as CompetitorResearchStatus | '');
-              setPage(1);
-            }}
-          >
-            <option value="">全部状态</option>
-            {Object.entries(researchStatusLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-wrap gap-3">
+          <label className="min-w-40 text-xs">
+            词根与大分类
+            <select
+              aria-label="筛选词根与大分类"
+              className={`${controlClass} mt-2`}
+              value={groupFilterId}
+              disabled={researchGroups.isLoading}
+              onChange={event => {
+                setGroupFilterId(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">全部归属</option>
+              {rootTermGroups.map(group => (
+                <option key={group.id} value={group.id}>
+                  {group.rootTerm} · {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="min-w-40 text-xs">
+            处理状态
+            <select
+              aria-label="筛选研究状态"
+              className={`${controlClass} mt-2`}
+              value={filter}
+              onChange={event => {
+                setFilter(event.target.value as CompetitorResearchStatus | '');
+                setPage(1);
+              }}
+            >
+              <option value="">全部状态</option>
+              {Object.entries(researchStatusLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
       {canManage && (
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.42fr)]">
@@ -1626,14 +1712,17 @@ function ResearchLibrary({
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#537695]">
-                  Step 1 · 输入资料
+                  Step 2 · 输入资料
                 </p>
                 <h3 className="mt-1 font-semibold text-[#3D3B4F]">
-                  粘贴网站资料，生成并保存预调研
+                  {intakeMode === 'codex_local_handoff'
+                    ? '导入本地 Skill 研究并保存'
+                    : '粘贴网站资料，生成并保存预调研'}
                 </h3>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
-                  粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM
-                  仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。
+                  {intakeMode === 'codex_local_handoff'
+                    ? '导入已完成的本地 Skill 原文、公开证据 URL 和 Codex 任务链接。GLM 只整理导入资料，不会重新抓取目标站或运行本地能力。'
+                    : '粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM 仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。'}
                 </p>
               </div>
               <label className="min-w-32 text-xs">
@@ -1655,7 +1744,81 @@ function ResearchLibrary({
               </label>
             </div>
             <label className="mt-4 block text-xs">
-              网站资料
+              Step 1 · 归属词根与大分类
+              <select
+                className={`${controlClass} mt-2`}
+                value={primaryGroupId}
+                disabled={intakeMutation.isPending || researchGroups.isLoading}
+                required
+                onChange={event => setPrimaryGroupId(event.target.value)}
+              >
+                <option value="">请先选择词根与大分类</option>
+                {rootTermGroups.map(group => (
+                  <option key={group.id} value={group.id}>
+                    {group.rootTerm} · {group.name}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block leading-5 text-[#6F6D7A]">
+                {selectedRootTermGroup
+                  ? `本次分析及其结果将归属词根“${selectedRootTermGroup.rootTerm}”下的大分类“${selectedRootTermGroup.name}”。后续细分分类只作标签，不改变归属。`
+                  : '先在右侧新建“词根 + 大分类”，或从已有分组中选择；未分组的旧记录仅供回溯。'}
+              </span>
+            </label>
+            <label className="mt-4 block text-xs">
+              研究方式
+              <select
+                className={`${controlClass} mt-2`}
+                value={intakeMode}
+                disabled={intakeMutation.isPending}
+                onChange={event =>
+                  setIntakeMode(event.target.value as CompetitorResearchIntakeMode)
+                }
+              >
+                <option value="pasted_site_research">快速粘贴资料</option>
+                <option value="codex_local_handoff">导入本地 Skill 研究</option>
+              </select>
+            </label>
+            {intakeMode === 'codex_local_handoff' && (
+              <>
+                <label className="mt-4 block text-xs">
+                  本地 Skill
+                  <select
+                    className={`${controlClass} mt-2`}
+                    value={intakeCapabilityId}
+                    disabled={intakeMutation.isPending}
+                    onChange={event =>
+                      setIntakeCapabilityId(event.target.value as CompetitorResearchLocalCapability)
+                    }
+                  >
+                    {Object.entries(competitorResearchLocalCapabilityMetadata).map(
+                      ([capabilityId, capability]) => (
+                        <option key={capabilityId} value={capabilityId}>
+                          {capability.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span className="mt-1 block leading-5 text-[#6F6D7A]">
+                    {competitorResearchLocalCapabilityMetadata[intakeCapabilityId].description}
+                  </span>
+                </label>
+                <label className="mt-4 block text-xs">
+                  Codex 任务链接
+                  <Input
+                    className="mt-2 min-h-11"
+                    value={intakeSourceThreadUrl}
+                    onChange={event => setIntakeSourceThreadUrl(event.target.value)}
+                    disabled={intakeMutation.isPending}
+                    required
+                    maxLength={2048}
+                    placeholder="codex://threads/..."
+                  />
+                </label>
+              </>
+            )}
+            <label className="mt-4 block text-xs">
+              {intakeMode === 'codex_local_handoff' ? '本地研究资料与证据 URL' : '网站资料'}
               <textarea
                 className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
                 value={rawInput}
@@ -1664,50 +1827,72 @@ function ResearchLibrary({
                 required
                 maxLength={12000}
                 placeholder={
-                  'Title: ...\nURL: https://example.com/\nH1: ...\nH2: ...\nPayment: ...'
+                  intakeMode === 'codex_local_handoff'
+                    ? 'URL: https://example.com/\n证据： https://example.com/pricing\n品类：...\n种子词：...\n支付证据：...'
+                    : 'Title: ...\nURL: https://example.com/\nH1: ...\nH2: ...\nPayment: ...'
                 }
               />
             </label>
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-              必须包含公开 HTTPS
-              URL。模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。
+              必须包含公开 HTTPS URL。
+              {intakeMode === 'codex_local_handoff'
+                ? ' 本地 Skill 导入还必须附上 Codex 任务链接与每项公开证据 URL；不会访问目标网站或创建监控。'
+                : ' 模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。'}
             </p>
-            <Button type="submit" className="mt-3" disabled={intakeMutation.isPending}>
+            <Button
+              type="submit"
+              className="mt-3"
+              disabled={intakeMutation.isPending || !primaryGroupId}
+            >
               <Sparkles size={16} className="mr-2" />
-              {intakeMutation.isPending ? '正在分析并保存…' : '分析并保存预调研'}
+              {intakeMutation.isPending
+                ? '正在分析并保存…'
+                : intakeMode === 'codex_local_handoff'
+                  ? '导入并保存本地研究'
+                  : '分析并保存预调研'}
             </Button>
             {intakeMutation.error && <ErrorNotice error={intakeMutation.error} />}
           </form>
           <form
-            onSubmit={event => void createCategory(event)}
+            onSubmit={event => void createGroup(event)}
             className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4 sm:p-5"
           >
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#6F6D7A]">
-              可选整理
+              Step 1 · 新建词根与大分类
             </p>
-            <h3 className="font-semibold text-[#3D3B4F]">人工分类</h3>
+            <h3 className="font-semibold text-[#3D3B4F]">词根与大分类</h3>
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-              新建分类后，可在每条研究档案的“手动划分与关联”中勾选；不会自动采纳模型建议。
+              例如词根“image to prompt”与大分类“AI
+              图片提示词工具”。保存后会自动选中，后续分析结果都会作为该分组的子记录保存。
             </p>
             <Input
               className="mt-3 min-h-11"
-              value={newCategoryName}
-              onChange={event => setNewCategoryName(event.target.value)}
-              disabled={categoryMutation.isPending}
+              value={newGroupName}
+              onChange={event => setNewGroupName(event.target.value)}
+              disabled={groupMutation.isPending}
               required
-              maxLength={40}
-              placeholder="例如：AI 视频工具"
+              maxLength={80}
+              placeholder="大分类，例如：AI 图片提示词工具"
+            />
+            <Input
+              className="mt-3 min-h-11"
+              value={newGroupRootTerm}
+              onChange={event => setNewGroupRootTerm(event.target.value)}
+              disabled={groupMutation.isPending}
+              required
+              maxLength={120}
+              placeholder="词根，例如：image to prompt"
             />
             <Button
               type="submit"
               className="mt-3"
               variant="outline"
-              disabled={categoryMutation.isPending}
+              disabled={groupMutation.isPending}
             >
               <Plus size={16} className="mr-2" />
-              新建分类
+              新建词根与大分类
             </Button>
-            {categoryMutation.error && <ErrorNotice error={categoryMutation.error} />}
+            {groupMutation.error && <ErrorNotice error={groupMutation.error} />}
           </form>
         </div>
       )}
@@ -1761,53 +1946,82 @@ function ResearchLibrary({
               </p>
             )}
             <ul className="mt-3 space-y-2" aria-label="研究结果列表">
-              {profiles.map((profile, index) => {
-                const selected = profile.id === selectedProfile?.id;
-                return (
-                  <li key={`${profile.id}:${profile.updatedAt}`}>
-                    <button
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => setSelectedProfileId(profile.id)}
-                      className={`w-full rounded-lg border p-3 text-left transition ${
-                        selected
-                          ? 'border-[#537695] bg-[#F4F8FB] shadow-sm ring-1 ring-[#C9D9E6]'
-                          : 'border-[#E3E2E6] bg-white hover:border-[#9BB7CD]'
-                      }`}
-                    >
-                      <span className="flex items-start justify-between gap-3">
-                        <span className="flex min-w-0 items-start gap-2">
-                          <span className="mt-0.5 shrink-0 text-[11px] font-semibold text-[#9B99A6]">
-                            {String(((pagination?.page ?? 1) - 1) * pageSize + index + 1).padStart(
-                              2,
-                              '0'
-                            )}
-                          </span>
-                          <span className="min-w-0 break-words text-sm font-semibold text-[#3D3B4F]">
-                            {profile.brandName}
-                          </span>
-                        </span>
-                        <span className="shrink-0 rounded-full bg-[#F9F8F6] px-2 py-0.5 text-[11px] text-[#6F6D7A]">
-                          {researchStatusLabels[profile.lifecycleStatus]}
-                        </span>
+              {profileGroups.map(group => (
+                <li key={group.rootTermGroup?.id ?? 'legacy-unclassified'}>
+                  <section className="rounded-lg border border-[#D9D8DE] bg-[#EFF0F2] p-2">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2 px-1 pb-2">
+                      <div className="min-w-0">
+                        <p className="break-words text-xs font-semibold text-[#3D3B4F]">
+                          {group.rootTermGroup?.name ?? '未分组（旧记录）'}
+                        </p>
+                        <p className="mt-0.5 break-words font-mono text-[11px] text-[#537695]">
+                          {group.rootTermGroup?.rootTerm ?? '历史记录没有词根与大分类'}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] text-[#6F6D7A]">
+                        本页 {group.profiles.length} 条
                       </span>
-                      <span className="mt-1 block truncate text-xs text-[#537695]">
-                        {profile.hostname}
-                      </span>
-                      {profile.productSummary && (
-                        <span className="mt-2 block text-xs leading-5 text-[#6F6D7A]">
-                          {profile.productSummary}
-                        </span>
-                      )}
-                      <span className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[#6F6D7A]">
-                        <span>{profile.seedKeywords.length} 个种子词</span>
-                        <span>{profile.paymentProviders.length} 条支付证据</span>
-                        <span>{formatTime(profile.updatedAt)}</span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
+                    </div>
+                    <ul className="space-y-2">
+                      {group.profiles.map(profile => {
+                        const selected = profile.id === selectedProfile?.id;
+                        const index = profiles.indexOf(profile);
+                        return (
+                          <li key={`${profile.id}:${profile.updatedAt}`}>
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() => setSelectedProfileId(profile.id)}
+                              className={`w-full rounded-lg border p-3 text-left transition ${
+                                selected
+                                  ? 'border-[#537695] bg-[#F4F8FB] shadow-sm ring-1 ring-[#C9D9E6]'
+                                  : 'border-[#E3E2E6] bg-white hover:border-[#9BB7CD]'
+                              }`}
+                            >
+                              <span className="flex items-start justify-between gap-3">
+                                <span className="flex min-w-0 items-start gap-2">
+                                  <span className="mt-0.5 shrink-0 text-[11px] font-semibold text-[#9B99A6]">
+                                    {String(
+                                      ((pagination?.page ?? 1) - 1) * pageSize + index + 1
+                                    ).padStart(2, '0')}
+                                  </span>
+                                  <span className="min-w-0 break-words text-sm font-semibold text-[#3D3B4F]">
+                                    {profile.brandName}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 rounded-full bg-[#F9F8F6] px-2 py-0.5 text-[11px] text-[#6F6D7A]">
+                                  {researchStatusLabels[profile.lifecycleStatus]}
+                                </span>
+                              </span>
+                              <span className="mt-1 block truncate text-xs text-[#537695]">
+                                {profile.hostname}
+                              </span>
+                              {profile.productSummary && (
+                                <span className="mt-2 block text-xs leading-5 text-[#6F6D7A]">
+                                  {profile.productSummary}
+                                </span>
+                              )}
+                              <span className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[#6F6D7A]">
+                                <span>
+                                  {isLocalSkillHandoff(profile.analysis?.researchMode)
+                                    ? `本地 Skill · ${
+                                        localCapabilityLabel(profile.analysis?.localCapabilityId) ??
+                                        '竞品分析'
+                                      }`
+                                    : '粘贴资料'}
+                                </span>
+                                <span>{profile.seedKeywords.length} 个种子词</span>
+                                <span>{profile.paymentProviders.length} 条支付证据</span>
+                                <span>{formatTime(profile.updatedAt)}</span>
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                </li>
+              ))}
             </ul>
             {pagination && (
               <nav
@@ -1877,6 +2091,7 @@ function ResearchLibrary({
               <ResearchProfileCard
                 key={`${selectedProfile.id}:${selectedProfile.updatedAt}`}
                 profile={selectedProfile}
+                groups={rootTermGroups}
                 categories={categories}
                 sites={sites}
                 monitors={monitors.data?.data.monitors ?? []}
@@ -1904,7 +2119,7 @@ function ResearchLibrary({
                     type="button"
                     className="mt-3"
                     variant="outline"
-                    disabled={draftMutation.isPending}
+                    disabled={draftMutation.isPending || !primaryGroupId}
                     onClick={() => void generateDraft()}
                   >
                     <Sparkles size={16} className="mr-2" />
@@ -2007,6 +2222,22 @@ function ResearchLibrary({
                       </select>
                     </label>
                     <label className="text-xs">
+                      归属词根与大分类
+                      <select
+                        className={`${controlClass} mt-2`}
+                        value={primaryGroupId}
+                        required
+                        onChange={event => setPrimaryGroupId(event.target.value)}
+                      >
+                        <option value="">请先选择词根与大分类</option>
+                        {rootTermGroups.map(group => (
+                          <option key={group.id} value={group.id}>
+                            {group.rootTerm} · {group.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs">
                       产品 / 品类结论
                       <textarea
                         className={`${controlClass} mt-2 min-h-22 py-2`}
@@ -2065,7 +2296,7 @@ function ResearchLibrary({
                         maxLength={4000}
                       />
                     </label>
-                    <Button type="submit">
+                    <Button type="submit" disabled={!primaryGroupId}>
                       <Plus size={16} className="mr-2" />
                       保存研究档案
                     </Button>
@@ -2086,6 +2317,7 @@ function ResearchLibrary({
 
 function ResearchProfileCard({
   profile,
+  groups,
   categories,
   sites,
   monitors,
@@ -2094,6 +2326,7 @@ function ResearchProfileCard({
   onAction,
 }: {
   profile: CompetitorResearchProfile;
+  groups: CompetitorResearchGroup[];
   categories: CompetitorCategory[];
   sites: OwnedSite[];
   monitors: CompetitorMonitor[];
@@ -2102,6 +2335,7 @@ function ResearchProfileCard({
   onAction: (action: ResearchAction) => Promise<unknown>;
 }): ReactElement {
   const [status, setStatus] = useState(profile.lifecycleStatus);
+  const [primaryGroupId, setPrimaryGroupId] = useState(profile.primaryGroup?.id ?? '');
   const [categoryIds, setCategoryIds] = useState(profile.categories.map(category => category.id));
   const [siteIds, setSiteIds] = useState(profile.sites.map(site => site.id));
   const [monitorIds, setMonitorIds] = useState(profile.monitors.map(monitor => monitor.id));
@@ -2175,12 +2409,18 @@ function ResearchProfileCard({
           {profile.productSummary}
         </p>
       )}
+      <p className="mt-3 break-words text-xs text-[#6F6D7A]">
+        <span className="mr-2">词根与大分类</span>
+        {profile.primaryGroup
+          ? `${profile.primaryGroup.rootTerm} · ${profile.primaryGroup.name}`
+          : '未分组（旧记录）'}
+      </p>
       <ResearchChips label="种子词" values={profile.seedKeywords} />
       <ResearchChips
         label="支付"
         values={profile.paymentProviders.map(item => `${item.provider} · ${item.status}`)}
       />
-      <ResearchChips label="业务分类" values={profile.categories.map(category => category.name)} />
+      <ResearchChips label="细分分类" values={profile.categories.map(category => category.name)} />
       <ResearchChips label="关联站点" values={profile.sites.map(site => site.name)} />
       <ResearchChips label="关联监控" values={profile.monitors.map(monitor => monitor.name)} />
       {profile.sources.length > 0 && (
@@ -2204,6 +2444,11 @@ function ResearchProfileCard({
             </div>
             {profile.analysis && (
               <p className="text-xs text-[#6F6D7A]">
+                {isLocalSkillHandoff(profile.analysis.researchMode)
+                  ? `本地 Skill · ${
+                      localCapabilityLabel(profile.analysis.localCapabilityId) ?? '竞品分析'
+                    } · `
+                  : '粘贴资料分析 · '}
                 {profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · {profile.analysis.model} ·{' '}
                 {formatTime(profile.analysis.generatedAt)}
               </p>
@@ -2261,7 +2506,9 @@ function ResearchProfileCard({
                 </div>
               </dl>
               <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
-                结论仅基于左侧输入；品类与支付状态仍需人工核验。
+                {isLocalSkillHandoff(profile.analysis?.researchMode)
+                  ? '结论来自导入的本地 Skill 研究及其列出的证据 URL；Traks 未访问目标站，品类与支付状态仍需人工核验。'
+                  : '结论仅基于左侧输入；品类与支付状态仍需人工核验。'}
               </p>
             </section>
           </div>
@@ -2271,8 +2518,40 @@ function ResearchProfileCard({
         <details className="mt-4 rounded-lg bg-[#F9F8F6] p-3">
           <summary className="cursor-pointer text-sm font-medium">手动划分与关联</summary>
           <div className="mt-4 grid gap-3">
+            <label className="text-xs">
+              词根与大分类（决定结果归属与分组）
+              <select
+                className={`${controlClass} mt-2`}
+                value={primaryGroupId}
+                disabled={pending}
+                onChange={event => setPrimaryGroupId(event.target.value)}
+              >
+                <option value="">未分组（仅保留旧记录）</option>
+                {groups.map(group => (
+                  <option key={group.id} value={group.id}>
+                    {group.rootTerm} · {group.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                className="mt-2"
+                size="sm"
+                variant="outline"
+                disabled={pending || primaryGroupId === (profile.primaryGroup?.id ?? '')}
+                onClick={() =>
+                  void onAction({
+                    suffix: `/${encodeURIComponent(profile.id)}`,
+                    method: 'PATCH',
+                    body: { primaryGroupId: primaryGroupId || null },
+                  })
+                }
+              >
+                保存词根与大分类
+              </Button>
+            </label>
             <ResearchLinkSelect
-              label="业务分类（多选）"
+              label="细分分类（多选，不影响词根与大分类）"
               value={categoryIds}
               options={categories.map(category => ({ id: category.id, label: category.name }))}
               disabled={pending}

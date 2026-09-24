@@ -343,6 +343,28 @@ export const competitorCategories = sqliteTable(
   table => [uniqueIndex('competitor_category_name_idx').on(table.workspaceId, table.nameKey)]
 );
 
+export const competitorResearchGroups = sqliteTable(
+  'competitor_research_groups',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    nameKey: text('name_key').notNull(),
+    rootTerm: text('root_term').notNull(),
+    rootTermKey: text('root_term_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  table => [
+    uniqueIndex('competitor_research_group_identity_idx').on(
+      table.workspaceId,
+      table.rootTermKey,
+      table.nameKey
+    ),
+  ]
+);
+
 export const competitorResearchProfiles = sqliteTable(
   'competitor_research_profiles',
   {
@@ -356,6 +378,9 @@ export const competitorResearchProfiles = sqliteTable(
     pageTitle: text('page_title'),
     productSummary: text('product_summary'),
     lifecycleStatus: text('lifecycle_status').notNull().default('inbox'),
+    primaryGroupId: text('primary_group_id').references(() => competitorResearchGroups.id, {
+      onDelete: 'set null',
+    }),
     seedKeywords: text('seed_keywords').notNull().default('[]'),
     paymentProviders: text('payment_providers').notNull().default('[]'),
     sources: text('sources').notNull().default('[]'),
@@ -369,6 +394,10 @@ export const competitorResearchProfiles = sqliteTable(
   table => [
     uniqueIndex('competitor_research_workspace_url_idx').on(table.workspaceId, table.homepageUrl),
     index('competitor_research_workspace_status_idx').on(table.workspaceId, table.lifecycleStatus),
+    index('competitor_research_workspace_primary_group_idx').on(
+      table.workspaceId,
+      table.primaryGroupId
+    ),
     index('competitor_research_hostname_idx').on(table.hostname),
   ]
 );
