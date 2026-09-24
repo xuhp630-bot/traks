@@ -160,6 +160,14 @@ export const competitorResearchFilters = z
     categoryId: competitorId.optional(),
     siteId: competitorId.optional(),
     monitorId: competitorId.optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce
+      .number()
+      .int()
+      .refine(value => value === 10 || value === 20, {
+        message: 'Page size must be 10 or 20',
+      })
+      .default(10),
   })
   .strict();
 export const competitorResearchDraftInput = z
@@ -179,6 +187,12 @@ export const competitorResearchDraftInput = z
       path: ['seedKeywords'],
     }
   );
+export const competitorResearchIntakeInput = z
+  .object({
+    rawInput: z.string().trim().min(20).max(12_000),
+    lifecycleStatus: competitorResearchStatus.default('inbox'),
+  })
+  .strict();
 export const competitorResearchLinksInput = z
   .object({ ids: z.array(competitorId).max(100).refine(distinctIds, 'Link ids must be unique') })
   .strict();
@@ -224,9 +238,10 @@ export const competitorPreResearchStageInput = z
 export const competitorPreResearchFilters = z
   .object({ stage: competitorPreResearchStage.optional() })
   .strict();
-export type CompetitorResearchFilters = z.infer<typeof competitorResearchFilters>;
+export type CompetitorResearchFilters = z.input<typeof competitorResearchFilters>;
 export type CompetitorResearchDraftInput = z.infer<typeof competitorResearchDraftInput>;
 export type CompetitorResearchStatus = z.infer<typeof competitorResearchStatus>;
+export type CompetitorResearchIntakeInput = z.infer<typeof competitorResearchIntakeInput>;
 export type CompetitorPreResearchStage = z.infer<typeof competitorPreResearchStage>;
 export type CompetitorPreResearchActionKind = z.infer<typeof competitorPreResearchActionKind>;
 export type CompetitorPreResearchOutcome = z.infer<typeof competitorPreResearchOutcome>;
@@ -301,6 +316,15 @@ export interface CompetitorResearchSource {
   note?: string;
 }
 
+export interface CompetitorResearchAnalysis {
+  provider: 'glm' | 'terra';
+  model: string;
+  generatedAt: number;
+  detailedAnalysis: string;
+  suggestedCategories: string[];
+  evidenceGaps: string[];
+}
+
 export interface CompetitorResearchProfile {
   id: string;
   workspaceId: string;
@@ -315,6 +339,8 @@ export interface CompetitorResearchProfile {
   sources: CompetitorResearchSource[];
   sourceThreadUrl: string | null;
   notes: string | null;
+  rawInput: string | null;
+  analysis: CompetitorResearchAnalysis | null;
   createdAt: number;
   updatedAt: number;
   categories: Pick<CompetitorCategory, 'id' | 'name'>[];
@@ -350,6 +376,15 @@ export interface CompetitorResearchDraft {
   limitations: string[];
 }
 
+export interface CompetitorResearchIntakeResult {
+  source: 'pasted_site_research';
+  profileId: string;
+  provider: 'glm' | 'terra';
+  model: string;
+  savedAt: number;
+  limitations: string[];
+}
+
 export interface CompetitorResearchReport {
   source: 'manual_research_library';
   generatedAt: number;
@@ -360,6 +395,12 @@ export interface CompetitorResearchReport {
     categoryId?: string;
     siteId?: string;
     monitorId?: string;
+  };
+  pagination: {
+    page: number;
+    pageSize: 10 | 20;
+    total: number;
+    totalPages: number;
   };
   limits: Pick<
     typeof COMPETITOR_LIMITS,

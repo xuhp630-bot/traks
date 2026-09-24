@@ -12,6 +12,8 @@ import type {
   CompetitorResearchDraft,
   CompetitorResearchDraftInput,
   CompetitorResearchFilters,
+  CompetitorResearchIntakeInput,
+  CompetitorResearchIntakeResult,
   CompetitorResearchReport,
 } from '@traks/shared';
 import type { buildAnalysisPackage } from '@traks/shared';
@@ -133,6 +135,8 @@ export const api = {
     if (filters.categoryId) query.set('categoryId', filters.categoryId);
     if (filters.siteId) query.set('siteId', filters.siteId);
     if (filters.monitorId) query.set('monitorId', filters.monitorId);
+    if (filters.page) query.set('page', String(filters.page));
+    if (filters.pageSize) query.set('pageSize', String(filters.pageSize));
     const response = await fetch(
       `${competitorRoot({ workspaceId })}/research${query.size ? `?${query}` : ''}`
     );
@@ -144,6 +148,18 @@ export const api = {
     input: CompetitorResearchDraftInput
   ): Promise<{ data: CompetitorResearchDraft }> {
     const response = await fetch(`${competitorRoot({ workspaceId })}/research/draft`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    await assertOk(response);
+    return response.json();
+  },
+  async intakeCompetitorResearch(
+    workspaceId: string,
+    input: CompetitorResearchIntakeInput
+  ): Promise<{ data: CompetitorResearchIntakeResult }> {
+    const response = await fetch(`${competitorRoot({ workspaceId })}/research/intake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(input),

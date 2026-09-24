@@ -4,20 +4,22 @@ import type {
   CompetitorResearchReport,
   CompetitorResearchSource,
   CompetitorResearchPayment,
+  CompetitorResearchAnalysis,
 } from '@traks/shared';
 import { COMPETITOR_LIMITS } from '@traks/shared';
 
 type StoredProfile = Omit<
   CompetitorResearchProfile,
-  'seedKeywords' | 'paymentProviders' | 'sources' | 'categories' | 'sites' | 'monitors'
+  'seedKeywords' | 'paymentProviders' | 'sources' | 'analysis' | 'categories' | 'sites' | 'monitors'
 > & {
   seedKeywords: string;
   paymentProviders: string;
   sources: string;
+  analysis: string | null;
 };
 
 const PROFILE_COLUMNS =
-  'id, workspace_id AS workspaceId, brand_name AS brandName, homepage_url AS homepageUrl, hostname, page_title AS pageTitle, product_summary AS productSummary, lifecycle_status AS lifecycleStatus, seed_keywords AS seedKeywords, payment_providers AS paymentProviders, sources, source_thread_url AS sourceThreadUrl, notes, created_at AS createdAt, updated_at AS updatedAt';
+  'id, workspace_id AS workspaceId, brand_name AS brandName, homepage_url AS homepageUrl, hostname, page_title AS pageTitle, product_summary AS productSummary, lifecycle_status AS lifecycleStatus, seed_keywords AS seedKeywords, payment_providers AS paymentProviders, sources, source_thread_url AS sourceThreadUrl, notes, raw_input AS rawInput, analysis, created_at AS createdAt, updated_at AS updatedAt';
 
 function json<T>(value: string, fallback: T): T {
   try {
@@ -99,35 +101,45 @@ export async function competitorResearchReport(
   filters: CompetitorResearchFilters,
   canManage: boolean
 ): Promise<CompetitorResearchReport> {
+  const { page: requestedPage = 1, pageSize: requestedPageSize = 10, ...scopeFilters } = filters;
+  const pageSize = requestedPageSize as 10 | 20;
   const clauses = ['profile.workspace_id = ?'];
-  const values: string[] = [workspaceId];
-  if (filters.lifecycleStatus) {
+  const values: (string | number)[] = [workspaceId];
+  if (scopeFilters.lifecycleStatus) {
     clauses.push('profile.lifecycle_status = ?');
-    values.push(filters.lifecycleStatus);
+    values.push(scopeFilters.lifecycleStatus);
   }
-  if (filters.categoryId) {
+  if (scopeFilters.categoryId) {
     clauses.push(
       'EXISTS (SELECT 1 FROM competitor_research_category_links AS link WHERE link.profile_id = profile.id AND link.category_id = ?)'
     );
-    values.push(filters.categoryId);
+    values.push(scopeFilters.categoryId);
   }
-  if (filters.siteId) {
+  if (scopeFilters.siteId) {
     clauses.push(
       'EXISTS (SELECT 1 FROM competitor_research_site_links AS link WHERE link.profile_id = profile.id AND link.site_id = ?)'
     );
-    values.push(filters.siteId);
+    values.push(scopeFilters.siteId);
   }
-  if (filters.monitorId) {
+  if (scopeFilters.monitorId) {
     clauses.push(
       'EXISTS (SELECT 1 FROM competitor_research_monitor_links AS link WHERE link.profile_id = profile.id AND link.monitor_id = ?)'
     );
-    values.push(filters.monitorId);
+    values.push(scopeFilters.monitorId);
   }
+  const where = clauses.join(' AND ');
+  const totalRow = await db
+    .prepare(`SELECT COUNT(*) AS total FROM competitor_research_profiles AS profile WHERE ${where}`)
+    .bind(...values)
+    .first<{ total: number }>();
+  const total = Number(totalRow?.total ?? 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(requestedPage, totalPages);
   const rows = await db
     .prepare(
-      `SELECT ${PROFILE_COLUMNS} FROM competitor_research_profiles AS profile WHERE ${clauses.join(' AND ')} ORDER BY CASE lifecycle_status WHEN 'focus' THEN 0 WHEN 'watch' THEN 1 WHEN 'inbox' THEN 2 WHEN 'parked' THEN 3 ELSE 4 END, updated_at DESC, id DESC`
+      `SELECT ${PROFILE_COLUMNS} FROM competitor_research_profiles AS profile WHERE ${where} ORDER BY CASE lifecycle_status WHEN 'focus' THEN 0 WHEN 'watch' THEN 1 WHEN 'inbox' THEN 2 WHEN 'parked' THEN 3 ELSE 4 END, updated_at DESC, id DESC LIMIT ? OFFSET ?`
     )
-    .bind(...values)
+    .bind(...values, pageSize, (page - 1) * pageSize)
     .all<StoredProfile>();
   const profileIds = rows.results.map(profile => profile.id);
   const categories = new Map<string, CompetitorResearchProfile['categories']>();
@@ -175,7 +187,8 @@ export async function competitorResearchReport(
     source: 'manual_research_library',
     generatedAt: Date.now(),
     canManage,
-    scope: { workspaceId, ...filters },
+    scope: { workspaceId, ...scopeFilters },
+    pagination: { page, pageSize, total, totalPages },
     limits: {
       researchProfiles: COMPETITOR_LIMITS.researchProfiles,
       researchCategoryLinks: COMPETITOR_LIMITS.researchCategoryLinks,
@@ -187,6 +200,9 @@ export async function competitorResearchReport(
       seedKeywords: json<string[]>(profile.seedKeywords, []),
       paymentProviders: json<CompetitorResearchPayment[]>(profile.paymentProviders, []),
       sources: json<CompetitorResearchSource[]>(profile.sources, []),
+      analysis: profile.analysis
+        ? json<CompetitorResearchAnalysis | null>(profile.analysis, null)
+        : null,
       categories: categories.get(profile.id) ?? [],
       sites: sites.get(profile.id) ?? [],
       monitors: monitors.get(profile.id) ?? [],

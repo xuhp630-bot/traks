@@ -9,6 +9,7 @@ import {
   competitorUpdate,
   competitorResearchFilters,
   competitorResearchDraftInput,
+  competitorResearchIntakeInput,
   competitorResearchInput,
   competitorResearchLinksInput,
   competitorResearchUpdate,
@@ -47,7 +48,10 @@ import {
   keywordHarvesterJobId,
   preResearchRunExists,
 } from '../lib/competitor-pre-research';
-import { generateCompetitorResearchDraft } from '../lib/competitor-research-draft';
+import {
+  generateCompetitorResearchDraft,
+  generateCompetitorResearchIntake,
+} from '../lib/competitor-research-draft';
 
 type Ctx = Context<{ Bindings: Bindings; Variables: Variables }>;
 type Access = {
@@ -234,6 +238,22 @@ async function validateResearchLinks(
   return null;
 }
 
+function pastedResearchUrl(rawInput: string): string | null {
+  const labeled = rawInput.match(/(?:^|\n)\s*URL\s*:\s*(.+)/i)?.[1];
+  const candidate =
+    labeled?.match(/https?:\/\/[^\s)\]>]+/)?.[0] ?? rawInput.match(/https?:\/\/[^\s)\]>]+/)?.[0];
+  return candidate?.replace(/[.,;]+$/, '') ?? null;
+}
+
+function providerFailureDetail(
+  attempts: { provider: string; outcome: string; reason?: string }[]
+): string {
+  const details = attempts
+    .filter(attempt => attempt.outcome !== 'succeeded')
+    .map(attempt => `${attempt.provider}:${attempt.reason ?? attempt.outcome}`);
+  return details.length ? ` (${details.join(', ')})` : '';
+}
+
 function preResearchRoutes() {
   return new Hono<{ Bindings: Bindings; Variables: Variables }>()
     .get('/', validate('query', competitorPreResearchFilters), async c => {
@@ -364,13 +384,92 @@ function researchRoutes() {
       if (!result.ok)
         return c.json(
           {
-            error:
-              'AI draft generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.',
+            error: `AI draft generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(result.attempts)}`,
             attempts: result.attempts,
           },
           503
         );
       return c.json({ data: result.data });
+    })
+    .post('/intake', validate('json', competitorResearchIntakeInput), async c => {
+      const scope = await access(c, true);
+      if (scope instanceof Response) return scope;
+      const body = c.req.valid('json');
+      const rawUrl = pastedResearchUrl(body.rawInput);
+      if (!rawUrl) return c.json({ error: 'Pasted research must include a public HTTPS URL' }, 400);
+      let url: URL;
+      try {
+        url = publicPageUrl(rawUrl);
+      } catch (error) {
+        return c.json(
+          { error: error instanceof CompetitorFetchError ? error.code : 'Invalid URL' },
+          400
+        );
+      }
+      const generated = await generateCompetitorResearchIntake(c.env, body);
+      if (!generated.ok)
+        return c.json(
+          {
+            error: `AI research generation is unavailable. Configure the GLM API key, or an authorized OpenAI-compatible Terra API bridge.${providerFailureDetail(generated.attempts)}`,
+            attempts: generated.attempts,
+          },
+          503
+        );
+      const id = createId();
+      const created = await c.env.DB.prepare(
+        'INSERT INTO competitor_research_profiles (id,workspace_id,brand_name,homepage_url,hostname,page_title,product_summary,lifecycle_status,seed_keywords,payment_providers,sources,raw_input,analysis,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM competitor_research_profiles WHERE workspace_id = ?) < ? ON CONFLICT DO NOTHING RETURNING id'
+      )
+        .bind(
+          id,
+          scope.workspaceId,
+          generated.data.draft.brandName,
+          url.href,
+          url.hostname,
+          generated.data.draft.pageTitle,
+          generated.data.draft.productSummary,
+          body.lifecycleStatus,
+          JSON.stringify(generated.data.draft.seedKeywords),
+          JSON.stringify(generated.data.draft.paymentProviders),
+          JSON.stringify([
+            { url: url.href, kind: 'landing', note: '用户粘贴的网站资料，未自动抓取。' },
+          ]),
+          body.rawInput,
+          JSON.stringify({
+            provider: generated.data.provider,
+            model: generated.data.model,
+            generatedAt: generated.data.generatedAt,
+            detailedAnalysis: generated.data.draft.detailedAnalysis,
+            suggestedCategories: generated.data.draft.suggestedCategories,
+            evidenceGaps: generated.data.draft.evidenceGaps,
+          }),
+          generated.data.generatedAt,
+          generated.data.generatedAt,
+          scope.workspaceId,
+          COMPETITOR_LIMITS.researchProfiles
+        )
+        .first();
+      if (!created)
+        return c.json(
+          { error: 'Duplicate homepage URL or 500-profile workspace limit reached' },
+          409
+        );
+      return c.json(
+        {
+          data: {
+            source: 'pasted_site_research',
+            profileId: id,
+            provider: generated.data.provider,
+            model: generated.data.model,
+            savedAt: generated.data.generatedAt,
+            limitations: [
+              'Only the text pasted in this form was analyzed and saved; no target website was fetched.',
+              'Suggested categories and payment evidence remain unverified until manually reviewed.',
+              'No competitor monitor or scheduler was created.',
+            ],
+          },
+        },
+        201
+      );
     })
     .get('/', validate('query', competitorResearchFilters), async c => {
       const scope = await access(c);
@@ -740,13 +839,31 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 app.onError((error, c) => {
   if (error instanceof HTTPException && error.status === 400)
     return c.json({ error: 'Invalid request body' }, 400);
-  console.error('competitor_request_failed');
-  return c.json({ error: 'Unable to read or update competitor data' }, 500);
+  const message = error instanceof Error ? error.message : '';
+  const code =
+    error instanceof CompetitorFetchError
+      ? error.code
+      : /D1|SQLITE|database/i.test(message)
+        ? 'storage_failure'
+        : /JSON|parse/i.test(message)
+          ? 'response_parse_failure'
+          : 'unexpected_failure';
+  console.error(
+    JSON.stringify({
+      event: 'competitor_request_failed',
+      path: c.req.path,
+      code,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: message.slice(0, 180),
+    })
+  );
+  return c.json({ error: `Competitor request failed (${code})` }, 500);
 });
 app.use('*', requireAuth);
 app.use('*', async (c, next) => {
-  const maxSize =
-    c.req.path.includes('/research/pre-research') || c.req.path.includes('/research/draft')
+  const maxSize = c.req.path.includes('/research/intake')
+    ? 16 * 1024
+    : c.req.path.includes('/research/pre-research') || c.req.path.includes('/research/draft')
       ? 12 * 1024
       : 2048;
   await bodyLimit({ maxSize, onError: c => c.json({ error: 'Request too large' }, 413) })(c, next);

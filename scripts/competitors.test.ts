@@ -19,7 +19,10 @@ import {
   runCompetitorSchedule,
   HOST_COOLDOWN_MS,
 } from '../apps/platform/api/src/lib/competitors';
-import { generateCompetitorResearchDraft } from '../apps/platform/api/src/lib/competitor-research-draft';
+import {
+  generateCompetitorResearchDraft,
+  generateCompetitorResearchIntake,
+} from '../apps/platform/api/src/lib/competitor-research-draft';
 import { hashToken } from '../apps/platform/api/src/lib/tokens';
 import type { Bindings } from '../apps/platform/api/src/types';
 import {
@@ -52,10 +55,25 @@ const draftInput = {
   productSummary: 'A manually supplied image workflow note.',
   seedKeywords: ['AI image generator'],
 };
+const intakeInput = {
+  rawInput: [
+    'Title: 205+ Free Developer Tools — No Signup | PromptSpace',
+    'URL: https://tools.promptspace.in/',
+    'H1: Free Online Developer Tools',
+    'H2: 205 tools available',
+    'H3: AI Tools',
+    'H3: JSON',
+    'H3: Image',
+    'H3: PDF',
+  ].join('\n'),
+  lifecycleStatus: 'inbox' as const,
+};
 const draftCompletion = (draft: object, status = 200): Response =>
   new Response(
     JSON.stringify(
-      status === 200 ? { choices: [{ message: { content: JSON.stringify(draft) } }] } : { error: 'fixture' }
+      status === 200
+        ? { choices: [{ message: { content: JSON.stringify(draft) } }] }
+        : { error: 'fixture' }
     ),
     { status, headers: { 'content-type': 'application/json' } }
   );
@@ -83,8 +101,22 @@ before(async () => {
       ENVIRONMENT: 'development',
       BETTER_AUTH_SECRET: 'local-fixture-only-not-a-production-secret',
       COMPETITOR_ALLOWED_HOSTS: 'fixture.example.com',
+      COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key',
     },
-    outboundService: () => {
+    outboundService: request => {
+      if (new URL(request.url).hostname === 'api.z.ai')
+        return draftCompletion({
+          brandName: 'PromptSpace',
+          pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
+          productSummary: 'A free browser-based developer utility collection.',
+          detailedAnalysis: '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。',
+          suggestedCategories: ['开发者工具站'],
+          seedKeywords: ['free developer tools', 'JSON tools'],
+          paymentProviderCandidates: [],
+          paymentProviders: [],
+          evidenceGaps: ['需要人工补充定价或结账页证据。'],
+          modelMetadata: { ignored: true },
+        });
       throw new Error('Unexpected network access in isolated tests');
     },
   });
@@ -807,6 +839,67 @@ test('AI research draft uses GLM-5.3 first and keeps payment candidates unconfir
   assert.deepEqual(calls[0].body.response_format, { type: 'json_object' });
 });
 
+test('pasted research intake generates detailed evidence-bound analysis without browsing', async () => {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  const result = await generateCompetitorResearchIntake(
+    { COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key' } as Bindings,
+    intakeInput,
+    {
+      now: () => instant,
+      fetcher: (async (url, init) => {
+        calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+        return draftCompletion({
+          brandName: 'PromptSpace',
+          pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
+          productSummary: 'A free browser-based developer utility collection.',
+          detailedAnalysis:
+            '该站点是面向开发者的免费在线工具集合。输入仅展示分类和工具数量，未提供价格页、结账页或支付服务商证据。',
+          suggestedCategories: ['开发者工具站', '在线工具导航'],
+          seedKeywords: ['free developer tools', 'JSON tools', 'AI utilities'],
+          paymentProviders: [],
+          evidenceGaps: ['需要人工补充定价或结账页证据，才能判断支付网关。'],
+          modelMetadata: { generatedBy: 'fixture' },
+        });
+      }) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.data.provider, 'glm');
+  assert.equal(result.data.model, 'glm-5.3');
+  assert.equal(result.data.generatedAt, instant);
+  assert.deepEqual(result.data.draft.suggestedCategories, ['开发者工具站', '在线工具导航']);
+  assert.deepEqual(result.data.draft.paymentProviders, []);
+  assert.match(result.data.draft.detailedAnalysis, /未提供价格页/);
+  assert.equal('modelMetadata' in result.data.draft, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.z.ai/api/paas/v4/chat/completions');
+  assert.equal(calls[0].body.max_tokens, 3200);
+  assert.match(JSON.stringify(calls[0].body.messages), /PromptSpace/);
+});
+
+test('pasted research intake saves source and detailed analysis without creating a monitor', async () => {
+  const response = await request(`${workspaceRoot}/research/intake`, 'POST', intakeInput);
+  assert.equal(response.status, 201);
+  const created = (await response.json()).data;
+  assert.equal(created.source, 'pasted_site_research');
+  assert.equal(created.provider, 'glm');
+  const report = (await (await request(`${workspaceRoot}/research`)).json()).data;
+  assert.equal(report.profiles.length, 1);
+  assert.equal(report.profiles[0].rawInput, intakeInput.rawInput);
+  assert.equal(report.profiles[0].analysis.detailedAnalysis, '该站点是面向开发者的免费在线工具集合，支付方式需要人工补充证据。');
+  assert.equal('modelMetadata' in report.profiles[0].analysis, false);
+  assert.equal(
+    (
+      await database
+        .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+        .bind('workspace')
+        .first<{ count: number }>()
+    )?.count,
+    0
+  );
+});
+
 test('AI research draft falls back to the configured Terra bridge after GLM fails', async () => {
   const calls: string[] = [];
   const result = await generateCompetitorResearchDraft(
@@ -946,10 +1039,7 @@ test('workspace API rejects cross-tenant sites, categories, monitors and token a
     workspaces.map(item => item.id),
     ['workspace']
   );
-  assert.equal(
-    (await request(`${workspaceRoot}/research/draft`, 'POST', draftInput)).status,
-    503
-  );
+  assert.equal((await request(`${workspaceRoot}/research/draft`, 'POST', draftInput)).status, 503);
   for (const filters of [
     'siteId=outside-site',
     'categoryId=outside-category',
@@ -1072,6 +1162,55 @@ test('research library keeps manual evidence workspace-scoped and only links an 
   assert.equal(
     (await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Updated' })).status,
     200
+  );
+});
+
+test('research library paginates saved intake metadata without creating monitors', async () => {
+  for (let index = 0; index < 10; index++) {
+    await researchProfile({
+      brandName: `Archive ${index}`,
+      homepageUrl: `https://fixture.example.com/archive-${index}`,
+    });
+  }
+  const intakeProfileId = await researchProfile({
+    brandName: 'Saved intake',
+    homepageUrl: 'https://fixture.example.com/saved-intake',
+  });
+  await database
+    .prepare('UPDATE competitor_research_profiles SET raw_input = ?, analysis = ? WHERE id = ?')
+    .bind(
+      intakeInput.rawInput,
+      JSON.stringify({
+        provider: 'glm',
+        model: 'glm-5.3',
+        generatedAt: instant,
+        detailedAnalysis: 'Saved detailed analysis.',
+        suggestedCategories: ['开发者工具站'],
+        evidenceGaps: ['Verify payment evidence.'],
+      }),
+      intakeProfileId
+    )
+    .run();
+  const firstPage = await (await request(`${workspaceRoot}/research?page=1&pageSize=10`)).json();
+  assert.equal(firstPage.data.pagination.page, 1);
+  assert.equal(firstPage.data.pagination.pageSize, 10);
+  assert.equal(firstPage.data.pagination.total, 11);
+  assert.equal(firstPage.data.pagination.totalPages, 2);
+  assert.equal(firstPage.data.profiles.length, 10);
+  assert.equal(firstPage.data.profiles[0].id, intakeProfileId);
+  assert.equal(firstPage.data.profiles[0].rawInput, intakeInput.rawInput);
+  assert.deepEqual(firstPage.data.profiles[0].analysis.suggestedCategories, ['开发者工具站']);
+  const lastPage = await (await request(`${workspaceRoot}/research?page=2&pageSize=10`)).json();
+  assert.equal(lastPage.data.pagination.page, 2);
+  assert.equal(lastPage.data.profiles.length, 1);
+  assert.equal(
+    (
+      await database
+        .prepare('SELECT count(*) AS count FROM competitor_monitors WHERE workspace_id = ?')
+        .bind('workspace')
+        .first<{ count: number }>()
+    )?.count,
+    0
   );
 });
 

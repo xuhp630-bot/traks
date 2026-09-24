@@ -181,16 +181,18 @@ function ResearchPanel({
   return (
     <>
       <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6">
-        <h2 className="text-lg font-semibold text-[#3D3B4F]">先预调研，再决定是否监控</h2>
+        <h2 className="text-lg font-semibold text-[#3D3B4F]">先粘贴资料预调研，再决定是否监控</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6D7A]">
-          导入 Keyword Harvester 任务摘要与分析步骤，保留可复制的行动路径和 Codex
-          来源引用；确认后再写入研究库。创建研究档案或关联己方网站都不会创建监控。
+          粘贴公开网站资料即可生成并保存详细研究档案；也可导入 Keyword Harvester
+          任务摘要与行动路径。所有分类、关联和监控均需人工确认，不会自动读取目标网站或启动调度。
         </p>
       </section>
       {groups.error && <ErrorNotice error={groups.error} />}
-      <PreResearchLibrary workspaceId={workspaceId} />
       {!groups.error && (
-        <ResearchLibrary workspaceId={workspaceId} sites={sites} categories={categories} />
+        <>
+          <ResearchLibrary workspaceId={workspaceId} sites={sites} categories={categories} />
+          <PreResearchLibrary workspaceId={workspaceId} />
+        </>
       )}
     </>
   );
@@ -1354,6 +1356,11 @@ function ResearchLibrary({
 }): ReactElement {
   const client = useQueryClient();
   const [filter, setFilter] = useState<CompetitorResearchStatus | ''>('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<10 | 20>(10);
+  const [rawInput, setRawInput] = useState('');
+  const [intakeStatus, setIntakeStatus] = useState<CompetitorResearchStatus>('inbox');
+  const [newCategoryName, setNewCategoryName] = useState('');
   const [brandName, setBrandName] = useState('');
   const [homepageUrl, setHomepageUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
@@ -1367,9 +1374,13 @@ function ResearchLibrary({
   const [notice, setNotice] = useState('');
   const [generatedDraft, setGeneratedDraft] = useState<CompetitorResearchDraft | null>(null);
   const research = useQuery({
-    queryKey: ['competitor-research', workspaceId, filter],
+    queryKey: ['competitor-research', workspaceId, filter, page, pageSize],
     queryFn: () =>
-      api.getCompetitorResearch(workspaceId, filter ? { lifecycleStatus: filter } : {}),
+      api.getCompetitorResearch(workspaceId, {
+        ...(filter ? { lifecycleStatus: filter } : {}),
+        page,
+        pageSize,
+      }),
   });
   const monitors = useQuery({
     queryKey: ['competitors', workspaceId, 'research-link-options'],
@@ -1403,6 +1414,27 @@ function ResearchLibrary({
           ? `已由 ${result.data.model} 生成待核验草稿，尚未保存。`
           : `GLM 未成功，本次由 Terra 后备 ${result.data.model} 生成待核验草稿，尚未保存。`
       );
+    },
+  });
+  const intakeMutation = useMutation({
+    mutationFn: () =>
+      api.intakeCompetitorResearch(workspaceId, {
+        rawInput,
+        lifecycleStatus: intakeStatus,
+      }),
+    onSuccess: result => {
+      setRawInput('');
+      setPage(1);
+      setNotice(`已由 ${result.data.model} 分析并保存完整预调研记录，尚未创建监控。`);
+      void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
+    },
+  });
+  const categoryMutation = useMutation({
+    mutationFn: () =>
+      api.mutateCompetitor({ workspaceId }, '/categories', 'POST', { name: newCategoryName }),
+    onSuccess: () => {
+      setNewCategoryName('');
+      void client.invalidateQueries({ queryKey: ['competitor-categories', workspaceId] });
     },
   });
   const generateDraft = async (): Promise<void> => {
@@ -1461,8 +1493,27 @@ function ResearchLibrary({
       return;
     }
   };
+  const saveIntake = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!rawInput.trim()) return;
+    try {
+      await intakeMutation.mutateAsync();
+    } catch {
+      return;
+    }
+  };
+  const createCategory = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!newCategoryName.trim()) return;
+    try {
+      await categoryMutation.mutateAsync();
+    } catch {
+      return;
+    }
+  };
   const profiles = research.data?.data.profiles ?? [];
   const canManage = research.data?.data.canManage ?? false;
+  const pagination = research.data?.data.pagination;
   return (
     <section
       className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6"
@@ -1481,7 +1532,10 @@ function ResearchLibrary({
             aria-label="筛选研究状态"
             className={`${controlClass} mt-2`}
             value={filter}
-            onChange={event => setFilter(event.target.value as CompetitorResearchStatus | '')}
+            onChange={event => {
+              setFilter(event.target.value as CompetitorResearchStatus | '');
+              setPage(1);
+            }}
           >
             <option value="">全部状态</option>
             {Object.entries(researchStatusLabels).map(([value, label]) => (
@@ -1492,6 +1546,92 @@ function ResearchLibrary({
           </select>
         </label>
       </div>
+      {canManage && (
+        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.45fr)]">
+          <form
+            onSubmit={event => void saveIntake(event)}
+            className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-[#3D3B4F]">粘贴网站资料并分析保存</h3>
+                <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
+                  粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM
+                  仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。
+                </p>
+              </div>
+              <label className="min-w-32 text-xs">
+                初始标记
+                <select
+                  className={`${controlClass} mt-2`}
+                  value={intakeStatus}
+                  disabled={intakeMutation.isPending}
+                  onChange={event =>
+                    setIntakeStatus(event.target.value as CompetitorResearchStatus)
+                  }
+                >
+                  {Object.entries(researchStatusLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="mt-4 block text-xs">
+              网站资料
+              <textarea
+                className={`${controlClass} mt-2 min-h-64 py-3 font-mono text-xs leading-5`}
+                value={rawInput}
+                onChange={event => setRawInput(event.target.value)}
+                disabled={intakeMutation.isPending}
+                required
+                maxLength={12000}
+                placeholder={
+                  'Title: ...\nURL: https://example.com/\nH1: ...\nH2: ...\nPayment: ...'
+                }
+              />
+            </label>
+            <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
+              必须包含公开 HTTPS
+              URL。模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。
+            </p>
+            <Button type="submit" className="mt-3" disabled={intakeMutation.isPending}>
+              <Sparkles size={16} className="mr-2" />
+              {intakeMutation.isPending ? '正在分析并保存…' : '分析并保存预调研'}
+            </Button>
+            {intakeMutation.error && <ErrorNotice error={intakeMutation.error} />}
+          </form>
+          <form
+            onSubmit={event => void createCategory(event)}
+            className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4"
+          >
+            <h3 className="font-semibold text-[#3D3B4F]">人工分类</h3>
+            <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
+              新建分类后，可在每条研究档案的“手动划分与关联”中勾选；不会自动采纳模型建议。
+            </p>
+            <Input
+              className="mt-3 min-h-11"
+              value={newCategoryName}
+              onChange={event => setNewCategoryName(event.target.value)}
+              disabled={categoryMutation.isPending}
+              required
+              maxLength={40}
+              placeholder="例如：AI 视频工具"
+            />
+            <Button
+              type="submit"
+              className="mt-3"
+              variant="outline"
+              disabled={categoryMutation.isPending}
+            >
+              <Plus size={16} className="mr-2" />
+              新建分类
+            </Button>
+            {categoryMutation.error && <ErrorNotice error={categoryMutation.error} />}
+          </form>
+        </div>
+      )}
       {research.error && (
         <div className="mt-4">
           <ErrorNotice error={research.error} />
@@ -1529,6 +1669,68 @@ function ResearchLibrary({
                 onAction={action => mutation.mutateAsync(action)}
               />
             ))}
+            {pagination && (
+              <nav
+                aria-label="竞品研究库分页"
+                className="flex flex-wrap items-end justify-between gap-3 rounded-xl bg-[#F9F8F6] p-3 text-xs text-[#6F6D7A]"
+              >
+                <label className="min-w-28">
+                  每页
+                  <select
+                    className="ml-2 rounded border bg-white px-2 py-1"
+                    value={pageSize}
+                    onChange={event => {
+                      setPageSize(Number(event.target.value) as 10 | 20);
+                      setPage(1);
+                    }}
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                  </select>
+                </label>
+                <span>
+                  第 {pagination.page} / {pagination.totalPages} 页 · 共 {pagination.total} 条
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={pagination.page <= 1}
+                    onClick={() => setPage(1)}
+                  >
+                    首页
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={pagination.page <= 1}
+                    onClick={() => setPage(current => Math.max(1, current - 1))}
+                  >
+                    上一页
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={pagination.page >= pagination.totalPages}
+                    onClick={() => setPage(current => Math.min(pagination.totalPages, current + 1))}
+                  >
+                    下一页
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={pagination.page >= pagination.totalPages}
+                    onClick={() => setPage(pagination.totalPages)}
+                  >
+                    末页
+                  </Button>
+                </div>
+              </nav>
+            )}
           </div>
           {canManage ? (
             <form
@@ -1827,6 +2029,31 @@ function ResearchProfileCard({
         <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-[#6F6D7A]">
           备注：{profile.notes}
         </p>
+      )}
+      {profile.analysis && (
+        <details className="mt-4 rounded-lg border border-[#C9D9E6] bg-[#F4F8FB] p-3">
+          <summary className="cursor-pointer text-sm font-medium">查看完整预调研</summary>
+          <p className="mt-3 text-xs text-[#6F6D7A]">
+            {profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · {profile.analysis.model} ·{' '}
+            {formatTime(profile.analysis.generatedAt)}
+          </p>
+          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-[#555163]">
+            {profile.analysis.detailedAnalysis}
+          </p>
+          <ResearchChips
+            label="建议分类（待人工确认）"
+            values={profile.analysis.suggestedCategories}
+          />
+          <ResearchChips label="待补证据" values={profile.analysis.evidenceGaps} />
+          {profile.rawInput && (
+            <details className="mt-3 rounded border border-[#E3E2E6] bg-white p-3">
+              <summary className="cursor-pointer text-xs font-medium">查看已保存的原始输入</summary>
+              <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-5 text-[#555163]">
+                {profile.rawInput}
+              </pre>
+            </details>
+          )}
+        </details>
       )}
       {canManage && (
         <details className="mt-4 rounded-lg bg-[#F9F8F6] p-3">

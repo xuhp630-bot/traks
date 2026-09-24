@@ -361,6 +361,8 @@ export const competitorResearchProfiles = sqliteTable(
     sources: text('sources').notNull().default('[]'),
     sourceThreadUrl: text('source_thread_url'),
     notes: text('notes'),
+    rawInput: text('raw_input'),
+    analysis: text('analysis'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
