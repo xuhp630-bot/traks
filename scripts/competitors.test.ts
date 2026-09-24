@@ -34,6 +34,7 @@ let runtime: Miniflare;
 let database: Bindings['DB'];
 let env: Bindings;
 let defaultResearchGroupId: string | null = null;
+let glmRequests = 0;
 const instant = Date.UTC(2026, 8, 1);
 const snapshot: CompetitorSnapshot = {
   title: 'Fixture plan',
@@ -111,7 +112,8 @@ before(async () => {
       COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key',
     },
     outboundService: request => {
-      if (new URL(request.url).hostname === 'api.z.ai')
+      if (new URL(request.url).hostname === 'api.z.ai') {
+        glmRequests += 1;
         return draftCompletion({
           brandName: 'PromptSpace',
           pageTitle: '205+ Free Developer Tools — No Signup | PromptSpace',
@@ -124,6 +126,7 @@ before(async () => {
           evidenceGaps: ['需要人工补充定价或结账页证据。'],
           modelMetadata: { ignored: true },
         });
+      }
       throw new Error('Unexpected network access in isolated tests');
     },
   });
@@ -179,6 +182,7 @@ after(async () => {
 });
 beforeEach(async () => {
   defaultResearchGroupId = null;
+  glmRequests = 0;
   await database.prepare('DELETE FROM competitor_pre_research_actions').run();
   await database.prepare('DELETE FROM competitor_pre_research_runs').run();
   await database.prepare('DELETE FROM competitor_research_profiles').run();
@@ -1041,6 +1045,32 @@ test('AI research intake classifies an upstream length stop without saving a par
   ]);
 });
 
+test('AI research intake honors an explicit GLM-5.3 choice without falling back to Terra', async () => {
+  const calls: string[] = [];
+  const result = await generateCompetitorResearchIntake(
+    {
+      COMPETITOR_RESEARCH_GLM_API_KEY: 'fixture-glm-key',
+      COMPETITOR_RESEARCH_TERRA_API_KEY: 'fixture-terra-key',
+      COMPETITOR_RESEARCH_TERRA_API_URL: 'https://terra.fixture.test/v1/chat/completions',
+      COMPETITOR_RESEARCH_TERRA_MODEL: 'gpt-5.6-terra',
+    } as Bindings,
+    intakeInput,
+    {
+      modelPreference: 'glm',
+      fetcher: (async url => {
+        calls.push(String(url));
+        return draftCompletion({}, 503);
+      }) as typeof fetch,
+    }
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.deepEqual(result.attempts, [
+    { provider: 'glm', model: 'glm-5.3', outcome: 'failed', reason: 'unavailable' },
+  ]);
+  assert.deepEqual(calls, ['https://api.z.ai/api/paas/v4/chat/completions']);
+});
+
 test('pasted research intake saves source and detailed analysis without creating a monitor', async () => {
   const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
   const response = await request(`${workspaceRoot}/research/intake`, 'POST', {
@@ -1076,6 +1106,48 @@ test('pasted research intake saves source and detailed analysis without creating
   );
 });
 
+test('research intake reuses an existing URL without another model request until explicitly regenerated', async () => {
+  const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
+  const created = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+  });
+  assert.equal(created.status, 201);
+  const profileId = (await created.json()).data.profileId as string;
+  const requestsAfterCreate = glmRequests;
+  const updatedInput = `${intakeInput.rawInput}\nH3: Developer Utilities`;
+  const duplicate = await request(`${workspaceRoot}/research/intake`, 'POST', {
+    ...intakeInput,
+    primaryGroupId,
+    rawInput: updatedInput,
+    modelPreference: 'glm',
+  });
+  assert.equal(duplicate.status, 200);
+  assert.deepEqual((await duplicate.json()).data, {
+    source: 'existing_research_profile',
+    profileId,
+    existing: true,
+    limitations: [
+      'An existing research profile already uses this homepage URL; no model request was made and no saved data was changed.',
+      'Use the explicit regeneration action to apply the current input while preserving its root-term grouping, links, sources, and notes.',
+      'No competitor monitor or scheduler was created or changed.',
+    ],
+  });
+  assert.equal(glmRequests, requestsAfterCreate);
+  const preserved = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(preserved.rawInput, intakeInput.rawInput);
+
+  const regenerated = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', {
+    rawInput: updatedInput,
+    modelPreference: 'glm',
+  });
+  assert.equal(regenerated.status, 200);
+  assert.equal(glmRequests, requestsAfterCreate + 1);
+  const updated = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
+  assert.equal(updated.rawInput, updatedInput);
+  assert.equal(updated.analysis.model, 'glm-5.3');
+});
+
 test('research profiles edit saved input, regenerate derived conclusions, and delete without deleting monitors', async () => {
   const primaryGroupId = await researchGroup('Developer tools', 'developer tools');
   const categoryId = await category('AI tools');
@@ -1099,14 +1171,16 @@ test('research profiles edit saved input, regenerate derived conclusions, and de
   assert.equal(
     (
       await request(`${workspaceRoot}/research/${profileId}`, 'PATCH', {
-        rawInput: updatedInput,
         notes: 'Preserve this manual note.',
         sourceThreadUrl: 'codex://threads/fixture-research',
       })
     ).status,
     200
   );
-  const regenerated = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST');
+  const regenerated = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', {
+    rawInput: updatedInput,
+    modelPreference: 'auto',
+  });
   assert.equal(regenerated.status, 200);
   const generated = (await regenerated.json()).data;
   assert.equal(generated.provider, 'glm');
@@ -1154,7 +1228,9 @@ test('research profiles edit saved input, regenerate derived conclusions, and de
 
 test('research regeneration rejects profiles without saved input and preserves their data', async () => {
   const profileId = await researchProfile({ notes: 'Manual only' });
-  const response = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST');
+  const response = await request(`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', {
+    modelPreference: 'auto',
+  });
   assert.equal(response.status, 400);
   const profile = (await (await request(`${workspaceRoot}/research`)).json()).data.profiles[0];
   assert.equal(profile.notes, 'Manual only');
@@ -1197,7 +1273,11 @@ test('Codex deep research import requires its task link and preserves listed pub
     ]
   );
   assert.equal(
-    (await request(`${workspaceRoot}/research/${created.profileId}/regenerate`, 'POST')).status,
+    (
+      await request(`${workspaceRoot}/research/${created.profileId}/regenerate`, 'POST', {
+        modelPreference: 'auto',
+      })
+    ).status,
     200
   );
   const regeneratedReport = (await (await request(`${workspaceRoot}/research`)).json()).data;
@@ -1719,7 +1799,11 @@ test('research profiles reject foreign links, write attempts from non-owners and
     );
   assert.equal((await request(`${workspaceRoot}/research?monitorId=outside-monitor`)).status, 404);
   assert.equal(
-    (await request(`${workspaceRoot}/research/outside-research/regenerate`, 'POST')).status,
+    (
+      await request(`${workspaceRoot}/research/outside-research/regenerate`, 'POST', {
+        modelPreference: 'auto',
+      })
+    ).status,
     404
   );
   assert.equal((await request(`${workspaceRoot}/research/outside-research`, 'DELETE')).status, 404);
@@ -1752,7 +1836,7 @@ test('research profiles reject foreign links, write attempts from non-owners and
         },
       ],
       [`${workspaceRoot}/research/${profileId}`, 'PATCH', { notes: 'Blocked' }],
-      [`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', undefined],
+      [`${workspaceRoot}/research/${profileId}/regenerate`, 'POST', { modelPreference: 'auto' }],
       [`${workspaceRoot}/research/${profileId}`, 'DELETE', undefined],
       [`${workspaceRoot}/research/${profileId}/categories`, 'PUT', { ids: [] }],
     ] as const)

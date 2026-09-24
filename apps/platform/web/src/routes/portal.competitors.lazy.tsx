@@ -26,6 +26,7 @@ import type {
   CompetitorResearchGroup,
   CompetitorResearchIntakeMode,
   CompetitorResearchLocalCapability,
+  CompetitorResearchModelPreference,
   CompetitorResearchStatus,
 } from '@traks/shared';
 import { competitorResearchLocalCapabilityMetadata } from '@traks/shared';
@@ -67,6 +68,11 @@ const researchStatusLabels: Record<CompetitorResearchStatus, string> = {
   watch: '持续观察',
   parked: '暂缓',
   discarded: '放弃',
+};
+const researchModelLabels: Record<CompetitorResearchModelPreference, string> = {
+  auto: '自动（GLM-5.3 优先，失败时尝试 Terra）',
+  glm: 'GLM-5.3',
+  terra: 'Terra',
 };
 const localCapabilityLabel = (
   capabilityId: CompetitorResearchLocalCapability | null | undefined
@@ -1448,6 +1454,9 @@ function ResearchLibrary({
   const [pageSize, setPageSize] = useState<10 | 20>(10);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [rawInput, setRawInput] = useState('');
+  const [intakeModelPreference, setIntakeModelPreference] =
+    useState<CompetitorResearchModelPreference>('auto');
+  const [existingProfileId, setExistingProfileId] = useState('');
   const [intakeStatus, setIntakeStatus] = useState<CompetitorResearchStatus>('inbox');
   const [intakeMode, setIntakeMode] =
     useState<CompetitorResearchIntakeMode>('pasted_site_research');
@@ -1512,6 +1521,7 @@ function ResearchLibrary({
         pageTitle: pageTitle || null,
         productSummary: summary || null,
         seedKeywords: splitList(keywords),
+        modelPreference: intakeModelPreference,
       }),
     onSuccess: result => {
       setGeneratedDraft(result.data);
@@ -1529,16 +1539,27 @@ function ResearchLibrary({
         lifecycleStatus: intakeStatus,
         primaryGroupId,
         researchMode: intakeMode,
+        modelPreference: intakeModelPreference,
         localCapabilityId: intakeMode === 'codex_local_handoff' ? intakeCapabilityId : null,
         sourceThreadUrl:
           intakeMode !== 'pasted_site_research' ? intakeSourceThreadUrl || null : null,
       }),
     onSuccess: result => {
+      setSelectedProfileId(result.data.profileId);
+      setPage(1);
+      if (result.data.source === 'existing_research_profile') {
+        setExistingProfileId(result.data.profileId);
+        setFilter('');
+        setGroupFilterId('');
+        setNotice(
+          '该 URL 已有研究档案，未调用模型，也未覆盖已有资料。确认后可使用当前输入更新该档案。'
+        );
+        return;
+      }
+      setExistingProfileId('');
       setRawInput('');
       setIntakeSourceThreadUrl('');
       setFilter(intakeStatus);
-      setPage(1);
-      setSelectedProfileId(result.data.profileId);
       setNotice(
         result.data.source !== 'pasted_site_research'
           ? '已导入本地 Skill 研究并保存完整预调研记录，尚未创建监控。'
@@ -1631,6 +1652,24 @@ function ResearchLibrary({
     if (!rawInput.trim()) return;
     try {
       await intakeMutation.mutateAsync();
+    } catch {
+      return;
+    }
+  };
+  const regenerateExistingProfile = async (): Promise<void> => {
+    if (!existingProfileId || !rawInput.trim()) return;
+    try {
+      await mutation.mutateAsync({
+        suffix: `/${encodeURIComponent(existingProfileId)}/regenerate`,
+        method: 'POST',
+        body: { rawInput, modelPreference: intakeModelPreference },
+      });
+      setExistingProfileId('');
+      setRawInput('');
+      setIntakeSourceThreadUrl('');
+      setNotice(
+        '已使用当前输入更新已有档案；词根、细分分类、站点/监控关联、来源和备注均已保留，未创建监控。'
+      );
     } catch {
       return;
     }
@@ -1741,23 +1780,44 @@ function ResearchLibrary({
                     : '粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。GLM 仅分析这段文字；原文、完整分析、品牌、种子词和支付判断会一起保存。'}
                 </p>
               </div>
-              <label className="min-w-32 text-xs">
-                初始标记
-                <select
-                  className={`${controlClass} mt-2`}
-                  value={intakeStatus}
-                  disabled={intakeMutation.isPending}
-                  onChange={event =>
-                    setIntakeStatus(event.target.value as CompetitorResearchStatus)
-                  }
-                >
-                  {Object.entries(researchStatusLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="flex flex-wrap gap-3">
+                <label className="min-w-32 text-xs">
+                  初始标记
+                  <select
+                    className={`${controlClass} mt-2`}
+                    value={intakeStatus}
+                    disabled={intakeMutation.isPending || mutation.isPending}
+                    onChange={event =>
+                      setIntakeStatus(event.target.value as CompetitorResearchStatus)
+                    }
+                  >
+                    {Object.entries(researchStatusLabels).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-56 text-xs">
+                  分析模型
+                  <select
+                    className={`${controlClass} mt-2`}
+                    value={intakeModelPreference}
+                    disabled={intakeMutation.isPending || mutation.isPending}
+                    onChange={event =>
+                      setIntakeModelPreference(
+                        event.target.value as CompetitorResearchModelPreference
+                      )
+                    }
+                  >
+                    {Object.entries(researchModelLabels).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
             <label className="mt-4 block text-xs">
               Step 1 · 归属词根与大分类
@@ -1838,8 +1898,11 @@ function ResearchLibrary({
               <textarea
                 className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
                 value={rawInput}
-                onChange={event => setRawInput(event.target.value)}
-                disabled={intakeMutation.isPending}
+                onChange={event => {
+                  setRawInput(event.target.value);
+                  setExistingProfileId('');
+                }}
+                disabled={intakeMutation.isPending || mutation.isPending}
                 required
                 maxLength={12000}
                 placeholder={
@@ -1855,18 +1918,35 @@ function ResearchLibrary({
                 ? ' 本地 Skill 导入还必须附上 Codex 任务链接与每项公开证据 URL；不会访问目标网站或创建监控。'
                 : ' 模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。'}
             </p>
-            <Button
-              type="submit"
-              className="mt-3"
-              disabled={intakeMutation.isPending || !primaryGroupId}
-            >
-              <Sparkles size={16} className="mr-2" />
-              {intakeMutation.isPending
-                ? '正在分析并保存…'
-                : intakeMode === 'codex_local_handoff'
-                  ? '导入并保存本地研究'
-                  : '分析并保存预调研'}
-            </Button>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                type="submit"
+                disabled={intakeMutation.isPending || mutation.isPending || !primaryGroupId}
+              >
+                <Sparkles size={16} className="mr-2" />
+                {intakeMutation.isPending
+                  ? '正在分析并保存…'
+                  : intakeMode === 'codex_local_handoff'
+                    ? `使用 ${researchModelLabels[intakeModelPreference]} 导入并保存`
+                    : `使用 ${researchModelLabels[intakeModelPreference]} 分析并保存`}
+              </Button>
+              {existingProfileId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={intakeMutation.isPending || mutation.isPending || !rawInput.trim()}
+                  onClick={() => void regenerateExistingProfile()}
+                >
+                  <RefreshCw size={16} className="mr-2" />
+                  使用当前输入更新已有档案
+                </Button>
+              )}
+            </div>
+            {existingProfileId && (
+              <p className="mt-2 text-xs leading-5 text-[#537695]">
+                已发现同 URL 档案。请确认后再更新；不会自动覆盖词根、细分分类、关联、来源或备注。
+              </p>
+            )}
             {intakeMutation.error && <ErrorNotice error={intakeMutation.error} />}
           </form>
           <form
@@ -2424,6 +2504,7 @@ function ResearchProfileCard({
       await onAction({
         suffix: `/${encodeURIComponent(profile.id)}/regenerate`,
         method: 'POST',
+        body: { modelPreference: 'auto' },
       });
     } catch {
       return;

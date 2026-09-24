@@ -3,6 +3,7 @@ import type {
   CompetitorResearchDraft,
   CompetitorResearchDraftInput,
   CompetitorResearchIntakeInput,
+  CompetitorResearchModelPreference,
   CompetitorResearchPayment,
 } from '@traks/shared';
 import type { Bindings } from '../types';
@@ -42,6 +43,7 @@ type Options = {
   fetcher?: Fetcher;
   now?: () => number;
   timeoutMs?: number;
+  modelPreference?: CompetitorResearchModelPreference;
 };
 
 const GLM_ENDPOINT = 'https://api.z.ai/api/paas/v4/chat/completions';
@@ -117,6 +119,10 @@ function providerConfig(env: Bindings, id: ProviderId): ProviderConfig | Attempt
 
 function isProviderConfig(value: ProviderConfig | Attempt): value is ProviderConfig {
   return 'id' in value;
+}
+
+function providerOrder(preference: CompetitorResearchModelPreference = 'auto'): ProviderId[] {
+  return preference === 'auto' ? ['glm', 'terra'] : [preference];
 }
 
 function unique(values: string[]): string[] {
@@ -338,7 +344,7 @@ export async function generateCompetitorResearchDraft(
   const attempts: Attempt[] = [];
   const fetcher = options.fetcher ?? fetch;
   const now = options.now ?? Date.now;
-  for (const id of ['glm', 'terra'] as const) {
+  for (const id of providerOrder(input.modelPreference ?? options.modelPreference)) {
     const config = providerConfig(env, id);
     if (!isProviderConfig(config)) {
       attempts.push(config);
@@ -395,7 +401,7 @@ export async function generateCompetitorResearchIntake(
   const attempts: Attempt[] = [];
   const fetcher = options.fetcher ?? fetch;
   const now = options.now ?? Date.now;
-  for (const id of ['glm', 'terra'] as const) {
+  for (const id of providerOrder(options.modelPreference)) {
     const config = providerConfig(env, id);
     if (!isProviderConfig(config)) {
       attempts.push(config);

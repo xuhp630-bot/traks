@@ -7,6 +7,8 @@ export const competitorResearchIntakeMode = z.enum([
   'codex_competitor_analysis',
   'codex_local_handoff',
 ]);
+export const competitorResearchModelPreference = z.enum(['auto', 'glm', 'terra']);
+export type CompetitorResearchModelPreference = z.infer<typeof competitorResearchModelPreference>;
 export const competitorResearchLocalCapability = z.enum([
   'competitor-analysis',
   'competitor-profiling',
@@ -207,6 +209,7 @@ export const competitorResearchDraftInput = z
     pageTitle: z.string().trim().min(1).max(200).nullable().default(null),
     productSummary: z.string().trim().min(1).max(4000).nullable().default(null),
     seedKeywords: z.array(researchKeyword).max(50).default([]),
+    modelPreference: competitorResearchModelPreference.default('auto'),
   })
   .strict()
   .refine(
@@ -223,6 +226,7 @@ export const competitorResearchIntakeInput = z
     lifecycleStatus: competitorResearchStatus.default('inbox'),
     primaryGroupId: competitorId,
     researchMode: competitorResearchIntakeMode.default('pasted_site_research'),
+    modelPreference: competitorResearchModelPreference.default('auto'),
     localCapabilityId: competitorResearchLocalCapability.nullable().default(null),
     sourceThreadUrl: sourceReferenceUrl.nullable().default(null),
   })
@@ -241,6 +245,12 @@ export const competitorResearchIntakeInput = z
       path: ['localCapabilityId'],
     }
   );
+export const competitorResearchRegenerateInput = z
+  .object({
+    rawInput: z.string().trim().min(20).max(12_000).optional(),
+    modelPreference: competitorResearchModelPreference.default('auto'),
+  })
+  .strict();
 export const competitorResearchLinksInput = z
   .object({ ids: z.array(competitorId).max(100).refine(distinctIds, 'Link ids must be unique') })
   .strict();
@@ -438,7 +448,7 @@ export interface CompetitorResearchDraft {
   limitations: string[];
 }
 
-export interface CompetitorResearchIntakeResult {
+export interface CompetitorResearchGeneratedIntakeResult {
   source: CompetitorResearchIntakeMode;
   profileId: string;
   provider: 'glm' | 'terra';
@@ -446,6 +456,17 @@ export interface CompetitorResearchIntakeResult {
   savedAt: number;
   limitations: string[];
 }
+
+export interface CompetitorResearchExistingIntakeResult {
+  source: 'existing_research_profile';
+  profileId: string;
+  existing: true;
+  limitations: string[];
+}
+
+export type CompetitorResearchIntakeResult =
+  | CompetitorResearchGeneratedIntakeResult
+  | CompetitorResearchExistingIntakeResult;
 
 export const competitorResearchLocalCapabilityMetadata: Record<
   CompetitorResearchLocalCapability,
