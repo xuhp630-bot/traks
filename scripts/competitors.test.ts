@@ -4,11 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { drizzle } from 'drizzle-orm/d1';
-import {
-  competitorInput,
-  extractLocalCompetitorResearch,
-  type CompetitorSnapshot,
-} from '../packages/shared/src/competitors';
+import { competitorInput, type CompetitorSnapshot } from '../packages/shared/src/competitors';
 import {
   publicPageUrl,
   isPublicAddress,
@@ -87,57 +83,6 @@ const localResearchReport = [
   '## Evidence Gaps',
   '- No checkout-flow evidence was supplied for every alternative.',
 ].join('\n');
-const structuredLocalResearchReport = [
-  'Title: CUTY AI - Visual Content Generation Platform',
-  'URL: https://www.cuty.ai/',
-  'H2: Sign up and get your extra discount',
-  '',
-  '截至 2026-09-25，依据 CUTY AI 公开页面、Terms 与前端配置：',
-  '',
-  '| 项目 | 结论 |',
-  '| --- | --- |',
-  '| 品类 | 多模型 AI 视觉内容生成平台 / All-in-one AI 创意套件，覆盖 AI 视频生成、AI 图片生成与编辑。 |',
-  '| 种子词 | 品牌/导航：`CUTY AI`、`Visual Content Generation Platform`；核心工作流：`Text to Video`、`Image to Video`、`AI video generator`。 |',
-  '| 定价 | 积分订阅制 + 年付折扣 + 付费用户加购 Credit Packs；公开页展示 Free、Lite、Pro 和 Max 方案。 |',
-  '| 支付网关 | Web 当前真实为 Stripe Checkout；Terms 同时列出第三方支付处理方。 |',
-  '| 待补证据 | 需要核验真实结账页的区域可用性。 |',
-  '',
-  '来源：https://www.cuty.ai/terms',
-  '来源任务：codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7',
-].join('\n');
-
-test('extracts local Skill report fields from the Codex result table without changing the report', () => {
-  const extraction = extractLocalCompetitorResearch(structuredLocalResearchReport);
-  assert.equal(extraction.found, true);
-  assert.equal(extraction.brandName, 'CUTY AI');
-  assert.equal(extraction.homepageUrl, 'https://www.cuty.ai/');
-  assert.equal(extraction.pageTitle, 'CUTY AI - Visual Content Generation Platform');
-  assert.match(extraction.productSummary ?? '', /多模型 AI 视觉内容生成平台/);
-  assert.deepEqual(extraction.seedKeywords, [
-    'CUTY AI',
-    'Visual Content Generation Platform',
-    'Text to Video',
-    'Image to Video',
-    'AI video generator',
-  ]);
-  assert.match(extraction.pricingConclusion ?? '', /积分订阅制/);
-  assert.deepEqual(extraction.paymentProviders, [
-    {
-      provider: 'Stripe',
-      status: 'confirmed',
-      evidence: 'Web 当前真实为 Stripe Checkout；Terms 同时列出第三方支付处理方。',
-    },
-  ]);
-  assert.deepEqual(extraction.sources, [
-    { url: 'https://www.cuty.ai/', kind: 'landing' },
-    { url: 'https://www.cuty.ai/terms', kind: 'manual' },
-  ]);
-  assert.deepEqual(extraction.evidenceGaps, ['需要核验真实结账页的区域可用性。']);
-  assert.equal(
-    extraction.sourceThreadUrl,
-    'codex://threads/01a0cea4-fa9c-7b41-bbc3-825d907572b7'
-  );
-});
 const draftCompletion = (draft: object, status = 200): Response =>
   new Response(
     JSON.stringify(

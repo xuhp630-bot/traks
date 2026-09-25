@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
+import { useState, type FormEvent, type ReactElement } from 'react';
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
@@ -31,10 +31,7 @@ import type {
   CompetitorResearchModelPreference,
   CompetitorResearchStatus,
 } from '@traks/shared';
-import {
-  competitorResearchLocalCapabilityMetadata,
-  extractLocalCompetitorResearch,
-} from '@traks/shared';
+import { competitorResearchLocalCapabilityMetadata } from '@traks/shared';
 import { api } from '@/lib/api';
 import { useWorkspace } from '@/lib/workspace';
 import { Button } from '@/components/ui/button';
@@ -851,16 +848,6 @@ function parsePaymentProviders(value: string): CompetitorResearchProfile['paymen
   });
 }
 
-function paymentProviderInputValue(
-  providers: CompetitorResearchProfile['paymentProviders']
-): string {
-  return providers
-    .map(provider =>
-      [provider.provider, provider.status, provider.evidence].filter(Boolean).join(':')
-    )
-    .join('\n');
-}
-
 function formatPaymentProviders(
   providers: CompetitorResearchDraft['draft']['paymentProviders']
 ): string {
@@ -954,19 +941,6 @@ function paymentFinding(
     profile.analysis?.evidenceGaps.find(gap => /支付|定价|结账/.test(gap)) ??
     '未识别可确认的支付网关；需要补充公开价格、结账页或支付服务商证据。'
   );
-}
-
-function pricingFinding(
-  profile: CompetitorResearchProfile,
-  sections: ResearchTextSection[]
-): string {
-  const extraction = extractLocalCompetitorResearch(
-    profile.analysis?.detailedAnalysis ?? profile.rawInput ?? ''
-  );
-  if (extraction.pricingConclusion) return extraction.pricingConclusion;
-  const section = sections.find(item => /定价|商业模式|pricing/i.test(item.title ?? ''));
-  if (section?.content) return section.content;
-  return '未从完整报告中识别到定价或商业模式；需要补充公开定价页或结账证据。';
 }
 
 function preResearchCopyText(
@@ -1534,31 +1508,6 @@ function ResearchLibrary({
   const [newStatus, setNewStatus] = useState<CompetitorResearchStatus>('inbox');
   const [notice, setNotice] = useState('');
   const [generatedDraft, setGeneratedDraft] = useState<CompetitorResearchDraft | null>(null);
-  useEffect(() => {
-    if (intakeMode !== 'codex_local_handoff' || !rawInput.trim()) return;
-    const extraction = extractLocalCompetitorResearch(rawInput);
-    if (!extraction.found) return;
-    if (extraction.brandName) setLocalBrandName(current => current || extraction.brandName || '');
-    if (extraction.homepageUrl)
-      setLocalHomepageUrl(current => current || extraction.homepageUrl || '');
-    if (extraction.pageTitle) setLocalPageTitle(current => current || extraction.pageTitle || '');
-    if (extraction.productSummary)
-      setLocalProductSummary(current => current || extraction.productSummary || '');
-    if (extraction.seedKeywords.length)
-      setLocalSeedKeywords(current => current || extraction.seedKeywords.join('\n'));
-    if (extraction.paymentProviders.length)
-      setLocalPaymentProviders(
-        current => current || paymentProviderInputValue(extraction.paymentProviders)
-      );
-    if (extraction.sources.length)
-      setLocalSources(
-        current => current || extraction.sources.map(source => source.url).join('\n')
-      );
-    if (extraction.evidenceGaps.length)
-      setLocalEvidenceGaps(current => current || extraction.evidenceGaps.join('\n'));
-    if (extraction.sourceThreadUrl)
-      setIntakeSourceThreadUrl(current => current || extraction.sourceThreadUrl || '');
-  }, [intakeMode, rawInput]);
   const research = useQuery({
     queryKey: ['competitor-research', workspaceId, filter, groupFilterId, page, pageSize],
     queryFn: () =>
@@ -1649,57 +1598,22 @@ function ResearchLibrary({
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
   });
-  const localImportPayload = (): CompetitorResearchDeepImportInput => {
-    const extraction = extractLocalCompetitorResearch(rawInput);
-    const seedKeywords = splitList(localSeedKeywords);
-    const paymentProviders = parsePaymentProviders(localPaymentProviders);
-    const extractedSourcesByUrl = new Map(
-      extraction.sources.map(source => [source.url, source] as const)
-    );
-    const sources = splitList(localSources).map(
-      url => extractedSourcesByUrl.get(url) ?? { url, kind: 'manual' as const }
-    );
-    const evidenceGaps = splitList(localEvidenceGaps);
-    return {
-      brandName: localBrandName || extraction.brandName || '',
-      homepageUrl: localHomepageUrl || extraction.homepageUrl || '',
-      pageTitle: localPageTitle || extraction.pageTitle || null,
-      productSummary: localProductSummary || extraction.productSummary || null,
-      lifecycleStatus: intakeStatus,
-      primaryGroupId,
-      localCapabilityId: intakeCapabilityId,
-      sourceThreadUrl: intakeSourceThreadUrl || extraction.sourceThreadUrl || '',
-      seedKeywords: seedKeywords.length ? seedKeywords : extraction.seedKeywords,
-      paymentProviders: paymentProviders.length ? paymentProviders : extraction.paymentProviders,
-      sources: sources.length ? sources : extraction.sources,
-      detailedAnalysis: rawInput,
-      suggestedCategories: [],
-      evidenceGaps: evidenceGaps.length ? evidenceGaps : extraction.evidenceGaps,
-    };
-  };
-  const applyLocalResearchExtraction = (): void => {
-    const extraction = extractLocalCompetitorResearch(rawInput);
-    if (!extraction.found) {
-      setNotice(
-        '未在输入资料中识别到模板字段；请保留原文后手动填写，或使用包含 Title、URL 和结果表格的完整本机报告。'
-      );
-      return;
-    }
-    if (extraction.brandName) setLocalBrandName(extraction.brandName);
-    if (extraction.homepageUrl) setLocalHomepageUrl(extraction.homepageUrl);
-    if (extraction.pageTitle) setLocalPageTitle(extraction.pageTitle);
-    if (extraction.productSummary) setLocalProductSummary(extraction.productSummary);
-    if (extraction.seedKeywords.length) setLocalSeedKeywords(extraction.seedKeywords.join('\n'));
-    if (extraction.paymentProviders.length)
-      setLocalPaymentProviders(paymentProviderInputValue(extraction.paymentProviders));
-    if (extraction.sources.length)
-      setLocalSources(extraction.sources.map(source => source.url).join('\n'));
-    if (extraction.evidenceGaps.length) setLocalEvidenceGaps(extraction.evidenceGaps.join('\n'));
-    if (extraction.sourceThreadUrl) setIntakeSourceThreadUrl(extraction.sourceThreadUrl);
-    setNotice(
-      '已从下方完整报告提取并回填可编辑字段；原报告不会改写。定价 / 商业模式会与报告一起保存并在结果中展示。'
-    );
-  };
+  const localImportPayload = (): CompetitorResearchDeepImportInput => ({
+    brandName: localBrandName,
+    homepageUrl: localHomepageUrl,
+    pageTitle: localPageTitle || null,
+    productSummary: localProductSummary || null,
+    lifecycleStatus: intakeStatus,
+    primaryGroupId,
+    localCapabilityId: intakeCapabilityId,
+    sourceThreadUrl: intakeSourceThreadUrl,
+    seedKeywords: splitList(localSeedKeywords),
+    paymentProviders: parsePaymentProviders(localPaymentProviders),
+    sources: splitList(localSources).map(url => ({ url, kind: 'manual' })),
+    detailedAnalysis: rawInput,
+    suggestedCategories: [],
+    evidenceGaps: splitList(localEvidenceGaps),
+  });
   const localImportMutation = useMutation({
     mutationFn: (profileId?: string) =>
       profileId
@@ -1858,7 +1772,6 @@ function ResearchLibrary({
   const profiles = research.data?.data.profiles ?? [];
   const rootTermGroups = researchGroups.data?.data.groups ?? [];
   const selectedRootTermGroup = rootTermGroups.find(group => group.id === primaryGroupId);
-  const localResearchExtraction = extractLocalCompetitorResearch(rawInput);
   const profileGroups = Array.from(
     profiles
       .reduce((groups, profile) => {
@@ -2062,7 +1975,7 @@ function ResearchLibrary({
                     value={intakeSourceThreadUrl}
                     onChange={event => setIntakeSourceThreadUrl(event.target.value)}
                     disabled={intakePending}
-                    required={!localResearchExtraction.sourceThreadUrl}
+                    required
                     maxLength={2048}
                     placeholder="codex://threads/..."
                   />
@@ -2078,7 +1991,7 @@ function ResearchLibrary({
                     value={localBrandName}
                     onChange={event => setLocalBrandName(event.target.value)}
                     disabled={intakePending}
-                    required={!localResearchExtraction.brandName}
+                    required
                     maxLength={100}
                     placeholder="例如：PromptSpace"
                   />
@@ -2090,7 +2003,7 @@ function ResearchLibrary({
                     value={localHomepageUrl}
                     onChange={event => setLocalHomepageUrl(event.target.value)}
                     disabled={intakePending}
-                    required={!localResearchExtraction.homepageUrl}
+                    required
                     maxLength={500}
                     placeholder="https://example.com/"
                   />
@@ -2182,50 +2095,6 @@ function ResearchLibrary({
                 }
               />
             </label>
-            {intakeMode === 'codex_local_handoff' && (
-              <div className="mt-3 rounded-lg border border-[#C9D9E6] bg-white p-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-[#3D3B4F]">从下方输入资料自动提取</p>
-                    <p className="mt-1 text-xs leading-5 text-[#6F6D7A]">
-                      识别本机报告的 Title、URL 和“品类 / 种子词 / 定价 /
-                      支付网关”结果表，并回填上方可编辑字段；不调用模型、不联网、不改写原报告。
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={intakePending || !rawInput.trim()}
-                    onClick={applyLocalResearchExtraction}
-                  >
-                    提取并回填
-                  </Button>
-                </div>
-                {rawInput.trim() && (
-                  <dl className="mt-3 grid gap-2 rounded-md bg-[#F4F8FB] p-3 text-xs sm:grid-cols-2">
-                    <div>
-                      <dt className="text-[#6F6D7A]">识别品牌</dt>
-                      <dd className="mt-1 break-words text-[#3D3B4F]">
-                        {localResearchExtraction.brandName ?? '未识别'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[#6F6D7A]">识别主页</dt>
-                      <dd className="mt-1 break-all text-[#3D3B4F]">
-                        {localResearchExtraction.homepageUrl ?? '未识别'}
-                      </dd>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <dt className="text-[#6F6D7A]">定价 / 商业模式</dt>
-                      <dd className="mt-1 whitespace-pre-wrap break-words leading-5 text-[#3D3B4F]">
-                        {localResearchExtraction.pricingConclusion ??
-                          '未从报告中识别；仍会原样保留在完整报告内。'}
-                      </dd>
-                    </div>
-                  </dl>
-                )}
-              </div>
-            )}
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
               {intakeMode === 'codex_local_handoff'
                 ? '主页、来源任务与完整报告均为必填。'
@@ -2859,7 +2728,6 @@ function ResearchProfileCard({
     ? detailedAnalysisSections(profile.analysis.detailedAnalysis)
     : [];
   const paymentConclusion = paymentFinding(profile, analysisSections);
-  const pricingConclusion = pricingFinding(profile, analysisSections);
   return (
     <article className="rounded-xl border border-[#E3E2E6] bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3182,12 +3050,6 @@ function ResearchProfileCard({
                     ) : (
                       <span className="text-sm text-[#6F6D7A]">未保存种子词。</span>
                     )}
-                  </dd>
-                </div>
-                <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 border-b border-[#E3E2E6] px-3 py-3">
-                  <dt className="text-sm font-semibold text-[#3D3B4F]">定价</dt>
-                  <dd className="whitespace-pre-wrap break-words text-sm leading-6 text-[#2F2D3A]">
-                    {pricingConclusion}
                   </dd>
                 </div>
                 <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-4 px-3 py-3">
