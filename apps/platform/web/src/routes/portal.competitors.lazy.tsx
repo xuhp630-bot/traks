@@ -7,7 +7,6 @@ import {
   ExternalLink,
   RefreshCw,
   Plus,
-  Sparkles,
   Trash2,
   Pencil,
   ShieldCheck,
@@ -23,12 +22,10 @@ import type {
   CompetitorPreResearchRun,
   CompetitorPreResearchStage,
   CompetitorResearchProfile,
-  CompetitorResearchDraft,
   CompetitorResearchDeepImportInput,
   CompetitorResearchGroup,
   CompetitorResearchIntakeMode,
   CompetitorResearchLocalCapability,
-  CompetitorResearchModelPreference,
   CompetitorResearchStatus,
 } from '@traks/shared';
 import { competitorResearchLocalCapabilityMetadata } from '@traks/shared';
@@ -71,19 +68,12 @@ const researchStatusLabels: Record<CompetitorResearchStatus, string> = {
   parked: '暂缓',
   discarded: '放弃',
 };
-const researchModelLabels: Record<CompetitorResearchModelPreference, string> = {
-  auto: '自动（GLM-5.3 优先，失败时尝试 Terra）',
-  glm: 'GLM-5.3',
-  terra: 'Terra',
-};
 const localCapabilityLabel = (
   capabilityId: CompetitorResearchLocalCapability | null | undefined
 ): string | null =>
   capabilityId ? competitorResearchLocalCapabilityMetadata[capabilityId]?.label : null;
 const isLocalSkillHandoff = (researchMode: CompetitorResearchIntakeMode | undefined): boolean =>
   researchMode === 'codex_competitor_analysis' || researchMode === 'codex_local_handoff';
-const isEvidenceBoundCompetitorAnalysis = (workflow: string | undefined): boolean =>
-  workflow === 'competitor-analysis-evidence-bound-v1';
 const preResearchStageLabels: Record<CompetitorPreResearchStage, string> = {
   imported: '已导入',
   reviewing: '分析中',
@@ -135,7 +125,7 @@ function CompetitorsPage(): ReactElement {
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-[#6F6D7A]">
             {view === 'research'
-              ? '先建立“分类 + 裂变词根”，再归档预调研与人工结论；每条结果都归属一个分类。分析不会自动读取目标站或启动调度。'
+              ? '先建立“分类 + 裂变词根”，再导入本机完成的研究报告与人工结论；每条结果都归属一个分类。不会自动读取目标站或启动调度。'
               : '仅查看公开页面的受控变化记录。监控不等于竞品流量、客户或转化数据。'}
           </p>
         </div>
@@ -205,10 +195,10 @@ function ResearchPanel({
   return (
     <>
       <section className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6">
-        <h2 className="text-lg font-semibold text-[#3D3B4F]">先粘贴资料预调研，再决定是否监控</h2>
+        <h2 className="text-lg font-semibold text-[#3D3B4F]">先导入本机研究，再决定是否监控</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[#6F6D7A]">
-          先为词根建立分类，再粘贴公开网站资料生成并保存详细研究档案；也可导入 Keyword Harvester
-          任务摘要与行动路径。所有分类、关联和监控均需人工确认，不会自动读取目标网站或启动调度。
+          先为词根建立分类，再导入本机完成的完整研究报告；也可归档 Keyword Harvester
+          任务摘要与行动路径。所有分类、关联和监控均需人工确认，不会自动读取目标网站、调用模型或启动调度。
         </p>
       </section>
       {groups.error && <ErrorNotice error={groups.error} />}
@@ -848,9 +838,7 @@ function parsePaymentProviders(value: string): CompetitorResearchProfile['paymen
   });
 }
 
-function formatPaymentProviders(
-  providers: CompetitorResearchDraft['draft']['paymentProviders']
-): string {
+function formatPaymentProviders(providers: CompetitorResearchProfile['paymentProviders']): string {
   return providers
     .map(
       provider =>
@@ -1036,7 +1024,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
       setSeedKeywords('');
       setSummary('');
       setSourceThreadUrl('');
-      setNotice('预调研任务已归档；尚未创建竞品档案或监控。');
+      setNotice('本机调研任务已归档；尚未创建竞品档案或监控。');
     } catch {
       return;
     }
@@ -1059,7 +1047,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
       setActionTitle('');
       setActionDetail('');
       setActionReferences('');
-      setNotice('行动步骤已加入当前预调研记录。');
+      setNotice('行动步骤已加入当前本机调研记录。');
     } catch {
       return;
     }
@@ -1072,7 +1060,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
         method: 'PATCH',
         body: { stage },
       });
-      setNotice('预调研阶段已更新。');
+      setNotice('调研阶段已更新。');
     } catch {
       return;
     }
@@ -1081,11 +1069,11 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
   return (
     <section
       className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6"
-      aria-label="竞品预调研"
+      aria-label="本机调研行动档案"
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-[#3D3B4F]">竞品预调研</h2>
+          <h2 className="text-lg font-semibold text-[#3D3B4F]">本机调研行动档案</h2>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
             录入 Keyword Harvester 任务的摘要和后续行动，而非读取插件本地存储。每条记录可引用 Codex
             任务，行动路径可单独查看和复制。
@@ -1116,7 +1104,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
             }}
           >
             <Plus size={16} className="mr-2" />
-            导入预调研
+            导入本机调研
           </Button>
         )}
       </div>
@@ -1124,7 +1112,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
         <div className="mt-4">
           <ErrorNotice error={runs.error} />
           <Button className="mt-3" variant="outline" onClick={() => void runs.refetch()}>
-            重试读取预调研
+            重试读取本机调研
           </Button>
         </div>
       )}
@@ -1142,11 +1130,11 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
         <div className="space-y-3">
           {runs.isLoading ? (
             <p role="status" className="text-sm text-[#6F6D7A]">
-              正在读取预调研…
+              正在读取本机调研…
             </p>
           ) : !list.length ? (
             <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
-              尚无预调研。空列表不代表没有竞品或关键词机会。
+              尚无本机调研记录。空列表不代表没有竞品或关键词机会。
             </p>
           ) : (
             list.map(run => (
@@ -1191,7 +1179,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
                 onClick={() =>
                   void navigator.clipboard
                     .writeText(preResearchCopyText(selected, detail.data?.data))
-                    .then(() => setNotice('已复制预调研与当前行动路径。'))
+                    .then(() => setNotice('已复制本机调研与当前行动路径。'))
                     .catch(() => setNotice('无法访问剪贴板，请手动复制。'))
                 }
               >
@@ -1359,7 +1347,7 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
           </div>
         ) : runs.data?.data.canManage ? (
           <form onSubmit={event => void create(event)} className="rounded-xl bg-[#F9F8F6] p-4">
-            <h3 className="font-semibold">导入预调研</h3>
+            <h3 className="font-semibold">导入本机调研</h3>
             <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
               <label className="text-xs">
                 Keyword Harvester 任务 URL
@@ -1446,13 +1434,13 @@ function PreResearchLibrary({ workspaceId }: { workspaceId: string }): ReactElem
               </label>
               <Button type="submit">
                 <Plus size={16} className="mr-2" />
-                归档预调研
+                归档本机调研
               </Button>
             </fieldset>
           </form>
         ) : (
           <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
-            当前账号只读，可查看已归档的预调研与行动路径。
+            当前账号只读，可查看已归档的本机调研与行动路径。
           </p>
         )}
       </div>
@@ -1484,30 +1472,15 @@ function ResearchLibrary({
   const [localPaymentProviders, setLocalPaymentProviders] = useState('');
   const [localSources, setLocalSources] = useState('');
   const [localEvidenceGaps, setLocalEvidenceGaps] = useState('');
-  const [intakeModelPreference, setIntakeModelPreference] =
-    useState<CompetitorResearchModelPreference>('auto');
   const [existingProfileId, setExistingProfileId] = useState('');
   const [intakeStatus, setIntakeStatus] = useState<CompetitorResearchStatus>('inbox');
-  const [intakeMode, setIntakeMode] =
-    useState<CompetitorResearchIntakeMode>('pasted_site_research');
   const [intakeCapabilityId, setIntakeCapabilityId] =
     useState<CompetitorResearchLocalCapability>('competitor-analysis');
   const [intakeSourceThreadUrl, setIntakeSourceThreadUrl] = useState('');
   const [primaryGroupId, setPrimaryGroupId] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupRootTerm, setNewGroupRootTerm] = useState('');
-  const [brandName, setBrandName] = useState('');
-  const [homepageUrl, setHomepageUrl] = useState('');
-  const [pageTitle, setPageTitle] = useState('');
-  const [summary, setSummary] = useState('');
-  const [keywords, setKeywords] = useState('');
-  const [payments, setPayments] = useState('');
-  const [sources, setSources] = useState('');
-  const [threadUrl, setThreadUrl] = useState('');
-  const [notes, setNotes] = useState('');
-  const [newStatus, setNewStatus] = useState<CompetitorResearchStatus>('inbox');
   const [notice, setNotice] = useState('');
-  const [generatedDraft, setGeneratedDraft] = useState<CompetitorResearchDraft | null>(null);
   const research = useQuery({
     queryKey: ['competitor-research', workspaceId, filter, groupFilterId, page, pageSize],
     queryFn: () =>
@@ -1537,64 +1510,7 @@ function ResearchLibrary({
     onSuccess: (_, action) => {
       if (action.method === 'DELETE')
         setNotice('研究档案已删除；独立竞品监控、历史快照和己方网站均未改动。');
-      if (action.suffix.endsWith('/regenerate'))
-        setNotice('已基于保存的输入重新生成分析；词根、分类、关联、来源与备注均已保留。');
       if (action.method === 'PATCH') setNotice('研究档案已更新。');
-      void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
-    },
-  });
-  const draftMutation = useMutation({
-    mutationFn: () =>
-      api.generateCompetitorResearchDraft(workspaceId, {
-        homepageUrl,
-        brandName: brandName || null,
-        pageTitle: pageTitle || null,
-        productSummary: summary || null,
-        seedKeywords: splitList(keywords),
-        modelPreference: intakeModelPreference,
-      }),
-    onSuccess: result => {
-      setGeneratedDraft(result.data);
-      setNotice(
-        result.data.provider === 'glm'
-          ? `已由 ${result.data.model} 生成待核验草稿，尚未保存。`
-          : `GLM 未成功，本次由 Terra 后备 ${result.data.model} 生成待核验草稿，尚未保存。`
-      );
-    },
-  });
-  const intakeMutation = useMutation({
-    mutationFn: () =>
-      api.intakeCompetitorResearch(workspaceId, {
-        rawInput,
-        lifecycleStatus: intakeStatus,
-        primaryGroupId,
-        researchMode: intakeMode,
-        modelPreference: intakeModelPreference,
-        localCapabilityId: intakeMode === 'codex_local_handoff' ? intakeCapabilityId : null,
-        sourceThreadUrl:
-          intakeMode !== 'pasted_site_research' ? intakeSourceThreadUrl || null : null,
-      }),
-    onSuccess: result => {
-      setSelectedProfileId(result.data.profileId);
-      setPage(1);
-      if (result.data.source === 'existing_research_profile') {
-        setExistingProfileId(result.data.profileId);
-        setFilter('');
-        setGroupFilterId('');
-        setNotice(
-          '该 URL 已有研究档案，未调用模型，也未覆盖已有资料。确认后可使用当前输入更新该档案。'
-        );
-        return;
-      }
-      setExistingProfileId('');
-      setRawInput('');
-      setIntakeSourceThreadUrl('');
-      setFilter(intakeStatus);
-      setNotice(
-        result.data.source !== 'pasted_site_research'
-          ? '已导入本地 Skill 研究并保存完整预调研记录，尚未创建监控。'
-          : `已由 ${result.data.model} 分析并保存完整预调研记录，尚未创建监控。`
-      );
       void client.invalidateQueries({ queryKey: ['competitor-research', workspaceId] });
     },
   });
@@ -1663,99 +1579,23 @@ function ResearchLibrary({
       void client.invalidateQueries({ queryKey: ['competitor-research-groups', workspaceId] });
     },
   });
-  const generateDraft = async (): Promise<void> => {
-    if (!primaryGroupId) {
-      setNotice('请先选择或新建“词根 + 大分类”，再生成分析。');
-      return;
-    }
-    if (!homepageUrl.trim()) {
-      setNotice('请先填写公开 HTTPS URL，再生成草稿。');
-      return;
-    }
-    try {
-      await draftMutation.mutateAsync();
-    } catch {
-      return;
-    }
-  };
-  const applyDraft = (): void => {
-    if (!generatedDraft) return;
-    setBrandName(generatedDraft.draft.brandName);
-    setPageTitle(generatedDraft.draft.pageTitle ?? '');
-    setSummary(generatedDraft.draft.productSummary ?? '');
-    setKeywords(generatedDraft.draft.seedKeywords.join('\n'));
-    if (!payments.trim() && generatedDraft.draft.paymentProviders.length)
-      setPayments(formatPaymentProviders(generatedDraft.draft.paymentProviders));
-    setGeneratedDraft(null);
-    setNotice('草稿已回填到表单；请人工核验证据后再保存研究档案。');
-  };
-  const create = async (event: FormEvent): Promise<void> => {
-    event.preventDefault();
-    try {
-      await mutation.mutateAsync({
-        suffix: '',
-        method: 'POST',
-        body: {
-          brandName,
-          homepageUrl,
-          pageTitle: pageTitle || null,
-          productSummary: summary || null,
-          lifecycleStatus: newStatus,
-          primaryGroupId,
-          seedKeywords: splitList(keywords),
-          paymentProviders: parsePaymentProviders(payments),
-          sources: splitList(sources).map(url => ({ url, kind: 'manual' })),
-          sourceThreadUrl: threadUrl || null,
-          notes: notes || null,
-        },
-      });
-      setBrandName('');
-      setHomepageUrl('');
-      setPageTitle('');
-      setSummary('');
-      setKeywords('');
-      setPayments('');
-      setSources('');
-      setThreadUrl('');
-      setNotes('');
-      setGeneratedDraft(null);
-      setNewStatus('inbox');
-    } catch {
-      return;
-    }
-  };
-  const saveIntake = async (event: FormEvent): Promise<void> => {
+  const saveLocalImport = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     if (!primaryGroupId) {
-      setNotice('请先选择或新建“词根 + 大分类”，再开始分析。');
+      setNotice('请先选择或新建“词根 + 大分类”，再导入研究报告。');
       return;
     }
     if (!rawInput.trim()) return;
     try {
-      if (intakeMode === 'codex_local_handoff') await localImportMutation.mutateAsync(undefined);
-      else await intakeMutation.mutateAsync();
+      await localImportMutation.mutateAsync(undefined);
     } catch {
       return;
     }
   };
-  const regenerateExistingProfile = async (): Promise<void> => {
+  const replaceExistingProfile = async (): Promise<void> => {
     if (!existingProfileId || !rawInput.trim()) return;
     try {
-      if (intakeMode === 'codex_local_handoff') {
-        await localImportMutation.mutateAsync(existingProfileId);
-        return;
-      }
-      await mutation.mutateAsync({
-        suffix: `/${encodeURIComponent(existingProfileId)}/regenerate`,
-        method: 'POST',
-        body: { rawInput, modelPreference: intakeModelPreference },
-      });
-      setExistingProfileId('');
-      setRawInput('');
-      setIntakeSourceThreadUrl('');
-      setNotice(
-        '已使用当前输入更新已有档案；词根、细分分类、站点/监控关联、来源和备注均已保留，未创建监控。'
-      );
+      await localImportMutation.mutateAsync(existingProfileId);
     } catch {
       return;
     }
@@ -1790,7 +1630,7 @@ function ResearchLibrary({
     profiles.find(profile => profile.id === selectedProfileId) ?? profiles[0] ?? null;
   const canManage = research.data?.data.canManage ?? false;
   const pagination = research.data?.data.pagination;
-  const intakePending = intakeMutation.isPending || localImportMutation.isPending;
+  const intakePending = localImportMutation.isPending;
   return (
     <section
       className="rounded-2xl border border-[#E3E2E6] bg-white p-5 sm:p-6"
@@ -1848,7 +1688,7 @@ function ResearchLibrary({
       {canManage && (
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.42fr)]">
           <form
-            onSubmit={event => void saveIntake(event)}
+            onSubmit={event => void saveLocalImport(event)}
             className="rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 sm:p-5"
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1856,15 +1696,10 @@ function ResearchLibrary({
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#537695]">
                   Step 2 · 输入资料
                 </p>
-                <h3 className="mt-1 font-semibold text-[#3D3B4F]">
-                  {intakeMode === 'codex_local_handoff'
-                    ? '导入本机深度研究并原样保存'
-                    : '粘贴网站资料，生成并保存预调研'}
-                </h3>
+                <h3 className="mt-1 font-semibold text-[#3D3B4F]">导入本机完整研究报告</h3>
                 <p className="mt-1 max-w-3xl text-xs leading-5 text-[#6F6D7A]">
-                  {intakeMode === 'codex_local_handoff'
-                    ? '导入已完成的本地 Skill 完整报告、公开证据 URL 和 Codex 任务链接。不会调用 GLM 或 Terra，不压缩报告，也不会重新抓取目标站或运行本地能力。'
-                    : '粘贴 Title、URL、H1/H2/H3、定价或支付证据等公开资料。在线模型按 competitor-analysis 的资料限定框架生成品牌、品类、种子词、支付结论和证据缺口；不会联网或假称已执行本机 Skill。'}
+                  导入已完成的本地研究报告、公开证据 URL 和 Codex 任务链接。不会调用 GLM 或
+                  Terra，不压缩报告，也不会重新抓取目标站或运行本地能力。
                 </p>
               </div>
               <div className="flex flex-wrap gap-3">
@@ -1885,27 +1720,6 @@ function ResearchLibrary({
                     ))}
                   </select>
                 </label>
-                {intakeMode !== 'codex_local_handoff' && (
-                  <label className="min-w-56 text-xs">
-                    分析模型
-                    <select
-                      className={`${controlClass} mt-2`}
-                      value={intakeModelPreference}
-                      disabled={intakePending || mutation.isPending}
-                      onChange={event =>
-                        setIntakeModelPreference(
-                          event.target.value as CompetitorResearchModelPreference
-                        )
-                      }
-                    >
-                      {Object.entries(researchModelLabels).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
               </div>
             </div>
             <label className="mt-4 block text-xs">
@@ -1930,59 +1744,41 @@ function ResearchLibrary({
                   : '先在右侧新建“词根 + 大分类”，或从已有分组中选择；未分组的旧记录仅供回溯。'}
               </span>
             </label>
-            <label className="mt-4 block text-xs">
-              研究方式
-              <select
-                className={`${controlClass} mt-2`}
-                value={intakeMode}
-                disabled={intakePending}
-                onChange={event =>
-                  setIntakeMode(event.target.value as CompetitorResearchIntakeMode)
-                }
-              >
-                <option value="pasted_site_research">快速粘贴资料</option>
-                <option value="codex_local_handoff">导入本地 Skill 研究</option>
-              </select>
-            </label>
-            {intakeMode === 'codex_local_handoff' && (
-              <>
-                <label className="mt-4 block text-xs">
-                  本地 Skill
-                  <select
-                    className={`${controlClass} mt-2`}
-                    value={intakeCapabilityId}
-                    disabled={intakePending}
-                    onChange={event =>
-                      setIntakeCapabilityId(event.target.value as CompetitorResearchLocalCapability)
-                    }
-                  >
-                    {Object.entries(competitorResearchLocalCapabilityMetadata).map(
-                      ([capabilityId, capability]) => (
-                        <option key={capabilityId} value={capabilityId}>
-                          {capability.label}
-                        </option>
-                      )
-                    )}
-                  </select>
-                  <span className="mt-1 block leading-5 text-[#6F6D7A]">
-                    {competitorResearchLocalCapabilityMetadata[intakeCapabilityId].description}
-                  </span>
-                </label>
-                <label className="mt-4 block text-xs">
-                  Codex 任务链接
-                  <Input
-                    className="mt-2 min-h-11"
-                    value={intakeSourceThreadUrl}
-                    onChange={event => setIntakeSourceThreadUrl(event.target.value)}
-                    disabled={intakePending}
-                    required
-                    maxLength={2048}
-                    placeholder="codex://threads/..."
-                  />
-                </label>
-              </>
-            )}
-            {intakeMode === 'codex_local_handoff' && (
+            <>
+              <label className="mt-4 block text-xs">
+                本地 Skill
+                <select
+                  className={`${controlClass} mt-2`}
+                  value={intakeCapabilityId}
+                  disabled={intakePending}
+                  onChange={event =>
+                    setIntakeCapabilityId(event.target.value as CompetitorResearchLocalCapability)
+                  }
+                >
+                  {Object.entries(competitorResearchLocalCapabilityMetadata).map(
+                    ([capabilityId, capability]) => (
+                      <option key={capabilityId} value={capabilityId}>
+                        {capability.label}
+                      </option>
+                    )
+                  )}
+                </select>
+                <span className="mt-1 block leading-5 text-[#6F6D7A]">
+                  {competitorResearchLocalCapabilityMetadata[intakeCapabilityId].description}
+                </span>
+              </label>
+              <label className="mt-4 block text-xs">
+                Codex 任务链接
+                <Input
+                  className="mt-2 min-h-11"
+                  value={intakeSourceThreadUrl}
+                  onChange={event => setIntakeSourceThreadUrl(event.target.value)}
+                  disabled={intakePending}
+                  required
+                  maxLength={2048}
+                  placeholder="codex://threads/..."
+                />
+              </label>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="text-xs">
                   品牌 / 产品名称
@@ -2075,9 +1871,9 @@ function ResearchLibrary({
                   />
                 </label>
               </div>
-            )}
+            </>
             <label className="mt-4 block text-xs">
-              {intakeMode === 'codex_local_handoff' ? '完整深度研究报告（原样保存）' : '网站资料'}
+              完整研究报告（原样保存）
               <textarea
                 className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
                 value={rawInput}
@@ -2085,49 +1881,30 @@ function ResearchLibrary({
                   setRawInput(event.target.value);
                   setExistingProfileId('');
                 }}
-                disabled={intakePending || mutation.isPending}
+                disabled={intakePending}
                 required
-                maxLength={intakeMode === 'codex_local_handoff' ? 48_000 : 12_000}
-                placeholder={
-                  intakeMode === 'codex_local_handoff'
-                    ? '粘贴本机 competitor-analysis 的完整输出；Markdown 标题、表格、证据链接均会保留。'
-                    : 'Title: ...\nURL: https://example.com/\nH1: ...\nH2: ...\nPayment: ...'
-                }
+                maxLength={48_000}
+                placeholder="粘贴本机完成的完整研究报告；Markdown 标题、表格、证据链接均会保留。"
               />
             </label>
             <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-              {intakeMode === 'codex_local_handoff'
-                ? '主页、来源任务与完整报告均为必填。'
-                : '必须包含公开 HTTPS URL。'}
-              {intakeMode === 'codex_local_handoff'
-                ? ' 公开证据 URL 可补充在上方；Traks 不会访问目标网站、读取插件数据、调用模型或创建监控。'
-                : ' 模型建议的业务分类和支付结论均待人工核验；不会访问目标网站或创建监控。'}
+              主页、来源任务与完整报告均为必填。公开证据 URL 可补充在上方；Traks
+              不会访问目标网站、读取插件数据、调用模型或创建监控。
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                type="submit"
-                disabled={intakePending || mutation.isPending || !primaryGroupId}
-              >
-                <Sparkles size={16} className="mr-2" />
-                {intakePending
-                  ? intakeMode === 'codex_local_handoff'
-                    ? '正在保存完整研究…'
-                    : '正在分析并保存…'
-                  : intakeMode === 'codex_local_handoff'
-                    ? '保存本机深度研究（不调用模型）'
-                    : `按竞品分析框架使用 ${researchModelLabels[intakeModelPreference]} 分析并保存`}
+              <Button type="submit" disabled={intakePending || !primaryGroupId}>
+                <Plus size={16} className="mr-2" />
+                {intakePending ? '正在导入完整研究…' : '导入本机完整研究报告'}
               </Button>
               {existingProfileId && (
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={intakePending || mutation.isPending || !rawInput.trim()}
-                  onClick={() => void regenerateExistingProfile()}
+                  disabled={intakePending || !rawInput.trim()}
+                  onClick={() => void replaceExistingProfile()}
                 >
                   <RefreshCw size={16} className="mr-2" />
-                  {intakeMode === 'codex_local_handoff'
-                    ? '使用本机报告覆盖已有档案'
-                    : '使用当前输入更新已有档案'}
+                  使用本机报告覆盖已有档案
                 </Button>
               )}
             </div>
@@ -2136,9 +1913,7 @@ function ResearchLibrary({
                 已发现同 URL 档案。请确认后再更新；不会自动覆盖词根、细分分类、关联、来源或备注。
               </p>
             )}
-            {(intakeMutation.error || localImportMutation.error) && (
-              <ErrorNotice error={intakeMutation.error ?? localImportMutation.error} />
-            )}
+            {localImportMutation.error && <ErrorNotice error={localImportMutation.error} />}
           </form>
           <form
             onSubmit={event => void createGroup(event)}
@@ -2295,7 +2070,7 @@ function ResearchLibrary({
                                         localCapabilityLabel(profile.analysis?.localCapabilityId) ??
                                         '竞品分析'
                                       }`
-                                    : '粘贴资料'}
+                                    : '历史研究记录'}
                                 </span>
                                 <span>{profile.seedKeywords.length} 个种子词</span>
                                 <span>{profile.paymentProviders.length} 条支付证据</span>
@@ -2397,210 +2172,6 @@ function ResearchLibrary({
                 从左侧列表选择一条结果查看完整资料。
               </p>
             )}
-            {canManage ? (
-              <details className="h-fit rounded-xl border border-[#E3E2E6] bg-[#F9F8F6] p-4">
-                <summary className="cursor-pointer text-sm font-semibold text-[#3D3B4F]">
-                  手动补充研究档案
-                </summary>
-                <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-                  仅在无法粘贴完整资料时使用。可先生成待核验草稿；只发送本表的
-                  URL、标题、摘要和种子词；不会读取目标站、插件数据、Cookie 或 Codex
-                  任务，也不会自动保存或创建监控。
-                </p>
-                <form onSubmit={event => void create(event)}>
-                  <Button
-                    type="button"
-                    className="mt-3"
-                    variant="outline"
-                    disabled={draftMutation.isPending || !primaryGroupId}
-                    onClick={() => void generateDraft()}
-                  >
-                    <Sparkles size={16} className="mr-2" />
-                    {draftMutation.isPending ? '正在生成草稿…' : '生成待核验草稿'}
-                  </Button>
-                  {draftMutation.error && <ErrorNotice error={draftMutation.error} />}
-                  {generatedDraft && (
-                    <aside className="mt-4 rounded-xl border border-[#C9D9E6] bg-[#F4F8FB] p-4 text-sm">
-                      <p className="font-medium text-[#3D3B4F]">
-                        {generatedDraft.provider === 'glm' ? 'GLM 优先模型' : 'Terra 后备模型'} ·{' '}
-                        {generatedDraft.model}
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-[#555163]">
-                        {generatedDraft.draft.productSummary ?? '未生成产品摘要'}
-                      </p>
-                      {generatedDraft.draft.seedKeywords.length > 0 && (
-                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                          建议种子词：{generatedDraft.draft.seedKeywords.join(' · ')}
-                        </p>
-                      )}
-                      {generatedDraft.draft.paymentProviders.length > 0 && (
-                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                          待核验支付候选：
-                          {generatedDraft.draft.paymentProviders
-                            .map(item => item.provider)
-                            .join(' · ')}
-                        </p>
-                      )}
-                      {generatedDraft.draft.evidenceGaps.length > 0 && (
-                        <p className="mt-2 break-words text-xs text-[#6F6D7A]">
-                          待补证据：{generatedDraft.draft.evidenceGaps.join(' · ')}
-                        </p>
-                      )}
-                      <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
-                        {generatedDraft.limitations[1]}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button type="button" size="sm" onClick={applyDraft}>
-                          应用到表单
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setGeneratedDraft(null)}
-                        >
-                          丢弃草稿
-                        </Button>
-                      </div>
-                    </aside>
-                  )}
-                  <fieldset disabled={mutation.isPending} className="mt-4 grid gap-3">
-                    <label className="text-xs">
-                      品牌 / 网站名称
-                      <Input
-                        className="mt-2 min-h-11"
-                        value={brandName}
-                        onChange={event => setBrandName(event.target.value)}
-                        required
-                        maxLength={100}
-                        placeholder="例如 OpenSourceGen"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      首页公开 HTTPS URL
-                      <Input
-                        className="mt-2 min-h-11"
-                        type="url"
-                        value={homepageUrl}
-                        onChange={event => setHomepageUrl(event.target.value)}
-                        required
-                        maxLength={500}
-                        placeholder="https://example.com/"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      页面标题 / 已知文案（可选）
-                      <Input
-                        className="mt-2 min-h-11"
-                        value={pageTitle}
-                        onChange={event => setPageTitle(event.target.value)}
-                        maxLength={200}
-                        placeholder="例如 AI Image Generator for Creators"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      初始状态
-                      <select
-                        className={`${controlClass} mt-2`}
-                        value={newStatus}
-                        onChange={event =>
-                          setNewStatus(event.target.value as CompetitorResearchStatus)
-                        }
-                      >
-                        {Object.entries(researchStatusLabels).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs">
-                      归属词根与大分类
-                      <select
-                        className={`${controlClass} mt-2`}
-                        value={primaryGroupId}
-                        required
-                        onChange={event => setPrimaryGroupId(event.target.value)}
-                      >
-                        <option value="">请先选择词根与大分类</option>
-                        {rootTermGroups.map(group => (
-                          <option key={group.id} value={group.id}>
-                            {group.rootTerm} · {group.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs">
-                      产品 / 品类结论
-                      <textarea
-                        className={`${controlClass} mt-2 min-h-22 py-2`}
-                        value={summary}
-                        onChange={event => setSummary(event.target.value)}
-                        maxLength={4000}
-                        placeholder="例如：开源模型聚合的图片与视频生成工具"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      种子词（逗号或换行分隔）
-                      <textarea
-                        className={`${controlClass} mt-2 min-h-20 py-2`}
-                        value={keywords}
-                        onChange={event => setKeywords(event.target.value)}
-                        maxLength={5000}
-                        placeholder="AI image generator, AI video generator"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      支付网关（`名称:状态`，状态为 confirmed / evidence_only / disabled / unknown）
-                      <Input
-                        className="mt-2 min-h-11"
-                        value={payments}
-                        onChange={event => setPayments(event.target.value)}
-                        maxLength={1200}
-                        placeholder="Stripe:confirmed, PayPal:evidence_only"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      证据来源 URL（逗号或换行分隔）
-                      <textarea
-                        className={`${controlClass} mt-2 min-h-20 py-2`}
-                        value={sources}
-                        onChange={event => setSources(event.target.value)}
-                        maxLength={5000}
-                        placeholder="https://example.com/pricing"
-                      />
-                    </label>
-                    <label className="text-xs">
-                      来源任务 / 备注链接（可选）
-                      <Input
-                        className="mt-2 min-h-11"
-                        value={threadUrl}
-                        onChange={event => setThreadUrl(event.target.value)}
-                        maxLength={2048}
-                        placeholder="codex://threads/..."
-                      />
-                    </label>
-                    <label className="text-xs">
-                      研究备注（可选）
-                      <textarea
-                        className={`${controlClass} mt-2 min-h-20 py-2`}
-                        value={notes}
-                        onChange={event => setNotes(event.target.value)}
-                        maxLength={4000}
-                      />
-                    </label>
-                    <Button type="submit" disabled={!primaryGroupId}>
-                      <Plus size={16} className="mr-2" />
-                      保存研究档案
-                    </Button>
-                  </fieldset>
-                </form>
-              </details>
-            ) : (
-              <p className="rounded-xl bg-[#F9F8F6] p-4 text-sm text-[#6F6D7A]">
-                当前账号只读，可查看研究结论和关联关系。
-              </p>
-            )}
           </div>
         </div>
       )}
@@ -2644,10 +2215,7 @@ function ResearchProfileCard({
   );
   const [editSourceThreadUrl, setEditSourceThreadUrl] = useState(profile.sourceThreadUrl ?? '');
   const [editNotes, setEditNotes] = useState(profile.notes ?? '');
-  const [editRawInput, setEditRawInput] = useState(profile.rawInput ?? '');
   const [editorOpen, setEditorOpen] = useState(false);
-  const [regenerateModelPreference, setRegenerateModelPreference] =
-    useState<CompetitorResearchModelPreference>('glm');
   const saveLinks = async (
     kind: 'categories' | 'sites' | 'monitors',
     ids: string[]
@@ -2679,29 +2247,9 @@ function ResearchProfileCard({
           paymentProviders: parsePaymentProviders(editPayments),
           sourceThreadUrl: editSourceThreadUrl || null,
           notes: editNotes || null,
-          rawInput:
-            profile.analysis?.provider === 'local_skill' ? undefined : editRawInput.trim() || null,
         },
       });
       setEditorOpen(false);
-    } catch {
-      return;
-    }
-  };
-  const regenerate = async (): Promise<void> => {
-    if (!profile.rawInput) return;
-    if (
-      !window.confirm(
-        `按 competitor-analysis 资料限定框架重新生成“${profile.brandName}”的分析？这会覆盖品牌、标题、摘要、种子词、支付结论和 AI 分析；分类、关联、来源与备注会保留。`
-      )
-    )
-      return;
-    try {
-      await onAction({
-        suffix: `/${encodeURIComponent(profile.id)}/regenerate`,
-        method: 'POST',
-        body: { modelPreference: regenerateModelPreference },
-      });
     } catch {
       return;
     }
@@ -2777,49 +2325,9 @@ function ResearchProfileCard({
               <Pencil size={15} className="mr-1.5" />
               {editorOpen ? '收起编辑' : '编辑档案'}
             </Button>
-            {profile.analysis?.provider === 'local_skill' ? (
-              <span className="text-xs leading-5 text-[#6F6D7A]">
-                要更新完整报告，请在上方“导入本机深度研究”粘贴新报告并选择覆盖；不会改用在线模型。
-              </span>
-            ) : (
-              <>
-                <label className="text-xs text-[#6F6D7A]">
-                  重生成模型
-                  <select
-                    aria-label={`${profile.brandName}重新生成模型`}
-                    className="ml-1 min-h-9 rounded-lg border px-2 text-xs text-[#3D3B4F]"
-                    value={regenerateModelPreference}
-                    disabled={pending || !profile.rawInput}
-                    onChange={event =>
-                      setRegenerateModelPreference(
-                        event.target.value as CompetitorResearchModelPreference
-                      )
-                    }
-                  >
-                    {Object.entries(researchModelLabels).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={pending || !profile.rawInput}
-                  title={
-                    profile.rawInput
-                      ? '使用已保存输入按竞品分析框架重新生成结论'
-                      : '先在编辑中保存输入资料后才能重新生成'
-                  }
-                  onClick={() => void regenerate()}
-                >
-                  <RefreshCw size={15} className="mr-1.5" />
-                  按框架重新生成
-                </Button>
-              </>
-            )}
+            <span className="text-xs leading-5 text-[#6F6D7A]">
+              要更新完整报告，请在上方导入新的本机研究报告并选择覆盖。
+            </span>
             <Button
               type="button"
               size="sm"
@@ -2875,9 +2383,7 @@ function ResearchProfileCard({
         >
           <summary className="cursor-pointer text-sm font-medium">编辑研究档案</summary>
           <p className="mt-2 text-xs leading-5 text-[#6F6D7A]">
-            {profile.analysis?.provider === 'local_skill'
-              ? '可修订展示字段、状态与关联。完整本机报告请通过上方的专用导入流程覆盖，以免压缩或丢失证据；不会创建、启动或修改竞品监控。'
-              : '可修订已保存的资料与原始输入。保存输入后可重新生成；编辑或重新生成均不会创建、启动或修改竞品监控。'}
+            可修订展示字段、状态与关联。完整本机报告请通过上方的专用导入流程覆盖，以免压缩或丢失证据；不会创建、启动或修改竞品监控。
           </p>
           <form onSubmit={event => void saveProfile(event)} className="mt-4">
             <fieldset disabled={pending} className="grid gap-3 sm:grid-cols-2">
@@ -2958,21 +2464,6 @@ function ResearchProfileCard({
                   maxLength={4000}
                 />
               </label>
-              {profile.analysis?.provider !== 'local_skill' && (
-                <label className="text-xs sm:col-span-2">
-                  输入资料
-                  <textarea
-                    aria-label={`${profile.brandName}可编辑输入资料`}
-                    className={`${controlClass} mt-2 min-h-56 py-3 font-mono text-xs leading-5`}
-                    value={editRawInput}
-                    onChange={event => setEditRawInput(event.target.value)}
-                    required={Boolean(profile.rawInput)}
-                    minLength={20}
-                    maxLength={12000}
-                    placeholder="粘贴可复核的公开资料；至少 20 个字符。保存后可重新生成。"
-                  />
-                </label>
-              )}
               <div className="sm:col-span-2">
                 <Button type="submit">保存编辑</Button>
               </div>
@@ -2981,30 +2472,23 @@ function ResearchProfileCard({
         </details>
       )}
       {(profile.analysis || profile.rawInput) && (
-        <section className="mt-5 border-t border-[#E3E2E6] pt-5" aria-label="预调研输入与结果">
+        <section className="mt-5 border-t border-[#E3E2E6] pt-5" aria-label="研究输入与结果">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#537695]">
                 输入 → 结果
               </p>
-              <h4 className="mt-1 text-sm font-semibold text-[#3D3B4F]">预调研记录</h4>
+              <h4 className="mt-1 text-sm font-semibold text-[#3D3B4F]">研究记录</h4>
             </div>
             {profile.analysis && (
               <p className="text-xs text-[#6F6D7A]">
                 {isLocalSkillHandoff(profile.analysis.researchMode)
-                  ? `本地 Skill · ${
+                  ? `本机研究导入 · ${
                       localCapabilityLabel(profile.analysis.localCapabilityId) ?? '竞品分析'
-                    } · ${
-                      profile.analysis.provider === 'local_skill'
-                        ? '完整报告原样导入'
-                        : '资料经模型整理'
-                    } · `
-                  : isEvidenceBoundCompetitorAnalysis(profile.analysis.workflow)
-                    ? '竞品分析框架（资料限定）· '
-                    : '粘贴资料分析 · '}
-                {profile.analysis.provider === 'local_skill'
-                  ? formatTime(profile.analysis.generatedAt)
-                  : `${profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'} · ${profile.analysis.model} · ${formatTime(profile.analysis.generatedAt)}`}
+                    } · ${formatTime(profile.analysis.generatedAt)}`
+                  : `历史研究记录 · ${
+                      profile.analysis.provider === 'glm' ? 'GLM' : 'Terra'
+                    } · ${profile.analysis.model} · ${formatTime(profile.analysis.generatedAt)}`}
               </p>
             )}
           </div>
@@ -3083,12 +2567,8 @@ function ResearchProfileCard({
               )}
               <p className="mt-3 text-xs leading-5 text-[#6F6D7A]">
                 {isLocalSkillHandoff(profile.analysis?.researchMode)
-                  ? profile.analysis?.provider === 'local_skill'
-                    ? '完整报告、公开证据与 Codex 任务链接均按导入内容保存；Traks 未访问目标站、调用模型或创建监控，品类与支付状态仍需人工核验。'
-                    : '结论来自导入的本地 Skill 研究及其列出的证据 URL；Traks 未访问目标站，品类与支付状态仍需人工核验。'
-                  : isEvidenceBoundCompetitorAnalysis(profile.analysis?.workflow)
-                    ? '在线模型按 competitor-analysis 的资料限定框架整理结论；未执行本机 Skill 或联网研究，品类、支付与竞争判断仍需人工核验。'
-                    : '结论仅基于左侧输入；品类与支付状态仍需人工核验。'}
+                  ? '完整报告、公开证据与 Codex 任务链接均按导入内容保存；Traks 未访问目标站、调用模型或创建监控，品类与支付状态仍需人工核验。'
+                  : '这是历史保存的研究记录。新的完整报告请通过上方本机导入覆盖；品类与支付状态仍需人工核验。'}
               </p>
             </section>
           </div>
