@@ -2,7 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import type { ReactElement } from 'react';
 import { ENTRY_FUNNEL_STAGES, MIN_RATE_SAMPLE, type Period } from '@traks/shared';
-import { api, type AnalyticsFilters } from '@/lib/api';
+import { api, ApiError, type AnalyticsFilters } from '@/lib/api';
+import { BusinessHealth, BusinessReadStatus } from './BusinessHealth';
 
 const goals: Record<string, string> = {
   toolSuccessSessions: '计算成功',
@@ -31,10 +32,12 @@ export function BusinessPanel({
   siteId,
   period,
   filters,
+  onInspectQuality,
 }: {
   siteId: string;
   period: Period;
   filters?: AnalyticsFilters;
+  onInspectQuality?: () => void;
 }): ReactElement {
   const query = useQuery({
     queryKey: ['site-business', siteId, period, filters],
@@ -42,6 +45,7 @@ export function BusinessPanel({
     staleTime: 60_000,
     retry: false,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const report = query.data?.data;
   const crmAllowed = !!report && Date.parse(report.scope.from) >= Date.now() - 90 * 86_400_000;
@@ -59,6 +63,7 @@ export function BusinessPanel({
     retry: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const registrations = crm.data && 'registrations' in crm.data ? crm.data.registrations : null;
   return (
@@ -74,19 +79,27 @@ export function BusinessPanel({
           }}
           className="flex size-11 shrink-0 items-center justify-center rounded-md border bg-white disabled:opacity-50"
         >
-          <RefreshCw className={query.isFetching ? 'size-4 animate-spin' : 'size-4'} />
+          <RefreshCw
+            aria-hidden="true"
+            className={
+              query.isFetching || crm.isFetching
+                ? 'size-4 animate-spin motion-reduce:animate-none'
+                : 'size-4'
+            }
+          />
         </button>
       </div>
-      {query.isError ? (
-        <p role="alert">统计暂不可用，请重试。未将读取失败记为零。</p>
-      ) : !report ? (
-        <p role="status">正在读取完整统计窗口…</p>
-      ) : (
+      <BusinessReadStatus
+        label="经营统计"
+        hasData={!!report}
+        isFetching={query.isFetching}
+        isError={query.isError}
+        lastUpdatedAt={query.dataUpdatedAt}
+        statusCode={query.error instanceof ApiError ? query.error.status : undefined}
+        onRetry={() => void query.refetch()}
+      />
+      {report && (
         <>
-          <p className="break-words text-xs text-[#6E6C7C]">
-            {report.scope.from} 至 {report.scope.to} · {report.scope.source} · production
-            标记口径，非已验证真人
-          </p>
           <dl className="grid grid-cols-2 gap-4 border-y py-4 sm:grid-cols-4">
             {Object.entries(report.population.wholeCohortClassification).map(([key, count]) => (
               <div key={key}>
@@ -108,6 +121,7 @@ export function BusinessPanel({
             生产浏览量 {report.business.pageviews} · 自定义事件 {report.business.customEvents} ·
             会话分母 {report.business.sessions}
           </p>
+          <BusinessHealth report={report} onInspectQuality={onInspectQuality} />
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <caption className="pb-3 text-left font-semibold">生产标记目标</caption>
@@ -169,13 +183,20 @@ export function BusinessPanel({
       )}
       <div className="space-y-3 border-t pt-5">
         <h3 className="font-semibold">注册与业务记录</h3>
-        {crm.isError ? (
-          <p role="alert">业务数据暂不可用，不能按零解释。</p>
-        ) : !crmAllowed ? (
+        {crmAllowed && (
+          <BusinessReadStatus
+            label="业务聚合"
+            hasData={!!crm.data}
+            isFetching={crm.isFetching}
+            isError={crm.isError}
+            lastUpdatedAt={crm.dataUpdatedAt}
+            statusCode={crm.error instanceof ApiError ? crm.error.status : undefined}
+            onRetry={() => void crm.refetch()}
+          />
+        )}
+        {!crmAllowed ? (
           <p className="text-sm">等待统计窗口；业务聚合仅支持最近 90 天。</p>
-        ) : crm.isPending ? (
-          <p role="status">正在读取业务聚合…</p>
-        ) : (
+        ) : crm.data ? (
           <>
             {registrations ? (
               <>
@@ -213,7 +234,7 @@ export function BusinessPanel({
               业务记录与匿名会话不做身份关联，不受页面/渠道筛选影响。已删除账号不在当前快照内；零请求不代表零注册。
             </p>
           </>
-        )}
+        ) : null}
       </div>
     </section>
   );

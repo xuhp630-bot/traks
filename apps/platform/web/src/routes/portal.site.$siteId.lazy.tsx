@@ -1058,6 +1058,15 @@ function SiteAnalyticsPage(): ReactElement {
   const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
   const [chartMetric, setChartMetric] = useState<ChartMetric>('visitors');
   const [showRaw, setShowRaw] = useState(false);
+  const [inspectQuality, setInspectQuality] = useState(false);
+  const qualityRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showRaw || !inspectQuality) return;
+    qualityRef.current?.scrollIntoView({ block: 'start' });
+    qualityRef.current?.focus({ preventScroll: true });
+    setInspectQuality(false);
+  }, [showRaw, inspectQuality]);
 
   // Per-panel tab state
   const [pagesTab, setPagesTab] = useState('top');
@@ -1621,6 +1630,10 @@ function SiteAnalyticsPage(): ReactElement {
               siteId={siteId}
               period={period}
               filters={filters}
+              onInspectQuality={() => {
+                setInspectQuality(true);
+                setShowRaw(true);
+              }}
             />
           ) : (
             <>
@@ -1640,12 +1653,14 @@ function SiteAnalyticsPage(): ReactElement {
                 period={period}
               />
 
-              <QualityConsole
-                key={JSON.stringify([siteId, period, filters])}
-                siteId={siteId}
-                period={period}
-                filters={filters}
-              />
+              <div ref={qualityRef} tabIndex={-1} className="scroll-mt-24 outline-none">
+                <QualityConsole
+                  key={JSON.stringify([siteId, period, filters])}
+                  siteId={siteId}
+                  period={period}
+                  filters={filters}
+                />
+              </div>
               <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
 
               {/* Pages + Sources */}

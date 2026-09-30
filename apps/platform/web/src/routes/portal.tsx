@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { authClient } from '@/lib/auth-client';
 import { destroyUrl, updateUrl, useInstanceConfig, useLatestVersion } from '@/lib/config';
+import { getVersionStatus, readLatestVersionResponse } from '@/lib/version-status';
 import { useWorkspace, WorkspaceProvider } from '@/lib/workspace';
 import { WorkspaceSwitcher } from '@/components/layout/WorkspaceSwitcher';
 import {
@@ -205,14 +206,14 @@ function HeaderTab({
 function UpdateBanner(): React.ReactNode {
   const config = useInstanceConfig();
   const latest = useLatestVersion();
+  const versionStatus = getVersionStatus(config?.version, latest);
   const dismissKey = `traks-update-dismissed-${latest ?? ''}`;
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     if (latest) setDismissed(localStorage.getItem(dismissKey) === '1');
   }, [latest, dismissKey]);
 
-  if (!config?.version || !latest) return null;
-  if (latest === config.version || dismissed) return null;
+  if (!config?.version || !versionStatus.updateAvailable || dismissed) return null;
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-4">
@@ -256,10 +257,10 @@ function UpdateBanner(): React.ReactNode {
 function VersionPill(): React.ReactNode {
   const config = useInstanceConfig();
   const latest = useLatestVersion();
+  const versionStatus = getVersionStatus(config?.version, latest);
   if (!config?.version) return null;
 
-  const updateAvailable = Boolean(latest && latest !== config.version);
-  if (updateAvailable) {
+  if (versionStatus.updateAvailable) {
     return (
       <a
         href={updateUrl(config)}
@@ -269,17 +270,17 @@ function VersionPill(): React.ReactNode {
         className="flex h-8 items-center gap-1.5 rounded-full bg-mint px-3 text-[11.5px] font-bold text-[#123326] transition-all hover:-translate-y-px"
       >
         <ArrowUpCircle className="h-3.5 w-3.5" strokeWidth={2.2} />
-        <span className="font-mono">v{latest}</span>
+        <span className="font-mono">v{latest?.replace(/^v/, '')}</span>
         <span className="hidden sm:inline">available</span>
       </a>
     );
   }
   return (
     <span
-      title={updateAvailable ? `Traks ${latest} is available` : 'Up to date'}
+      title={versionStatus.message}
       className="hidden sm:flex h-8 items-center rounded-full border border-[#E6E4DE] bg-white px-3 font-mono text-[11px] text-[#9B9590]"
     >
-      v{config.version}
+      v{config.version.replace(/^v/, '')}
     </span>
   );
 }
@@ -299,14 +300,10 @@ function UserMenu(): React.ReactNode {
     setCheckNote(null);
     try {
       const res = await fetch(`https://traks.dev/api/deploy/latest-version?bust=${Date.now()}`);
-      const body = (await res.json()) as { data?: { version?: string } };
-      const version = body.data?.version;
-      if (version) {
-        queryClient.setQueryData(['latest-version'], version);
-        setCheckNote(version === config?.version ? 'Up to date' : `v${version} available`);
-      } else {
-        setCheckNote('Check failed');
-      }
+      const version = await readLatestVersionResponse(res);
+      const versionStatus = getVersionStatus(config?.version, version);
+      queryClient.setQueryData(['latest-version'], version);
+      setCheckNote(versionStatus.message);
     } catch {
       setCheckNote('Check failed');
     }
