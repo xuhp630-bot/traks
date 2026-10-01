@@ -678,7 +678,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_quality_evidence',
     description:
-      'Read one complete, privacy-normalized page of quality evidence. Keep period and all filters unchanged while following nextCursor until it is null. Today reads live store; other periods read R2 history. Rows include pageviews, custom events, traffic classification (production/qa/internal/unknown), failures, forms, validation, and resource-load evidence.',
+      'Read one complete, privacy-normalized page of quality evidence. Keep period and all filters unchanged while following nextCursor until it is null. Today reads live store; other periods read R2 history. Rows include pageviews, custom events, traffic classification (production/qa/internal/unknown), failures, forms, validation, and resource-load evidence with optional fixed origin/asset enums. Missing historical enums stay unknown; no asset URLs are returned.',
     inputSchema: {
       type: 'object',
       properties: evidenceProps,
@@ -698,7 +698,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_quality_insights',
     description:
-      'Preferred business report: complete cohort classification and separately displayed unknown/internal/QA coverage; business pageviews and goals share the selected production-labelled session denominator. Includes strictly ordered article/direct/directory entryFunnels, operations and issues. Production labels do not prove humans. Contact acceptance is browser-observed, not delivery or a qualified lead. Read get_crm_quality separately for account totals and server-confirmed business evidence; never join anonymous sessions to accounts. Check complete before interpreting metrics.',
+      'Preferred business report: complete cohort classification and separately displayed unknown/internal/QA coverage; business pageviews and goals share the selected production-labelled session denominator. Includes strictly ordered article/direct/directory entryFunnels, operations, issues and issueSummary with deduplicated diagnostic/resource session counts. Outcome, unknown reason and unknown resource origin are distinct; issue groups can overlap and are not verified outages/users. Missing optional summary is unavailable, not zero. Production labels do not prove humans. Contact acceptance is browser-observed, not delivery or a qualified lead. Read get_crm_quality separately for account totals and server-confirmed business evidence; never join anonymous sessions to accounts. Check complete before interpreting metrics.',
     inputSchema: {
       type: 'object',
       properties: { siteId: str('Site id (from list_sites)'), period, ...filterSchema },

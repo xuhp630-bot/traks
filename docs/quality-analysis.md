@@ -10,12 +10,12 @@ population; their numbers are not interchangeable with this section.
 
 Concrete Estimator Hub adds these allowlisted properties to workflow events:
 
-| Property           | Meaning                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `traffic_type`     | `production`, `qa` or `internal`                              |
-| `tracking_version` | `cw-v3`, the measurement contract                             |
-| `release_version`  | `quality-v3`, an instrumentation release label, not a Git SHA |
-| `locale`           | `en`, `es` or `fr`                                            |
+| Property           | Meaning                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------- |
+| `traffic_type`     | `production`, `qa` or `internal`                                                          |
+| `tracking_version` | `cw-v3`, the measurement contract                                                         |
+| `release_version`  | `quality-v4` for the new release; historical `quality-v3` remains distinct, not a Git SHA |
+| `locale`           | `en`, `es` or `fr`                                                                        |
 
 Use `?analytics_traffic=qa` or the existing `utm_source=release-qa` for controlled
 QA. Use `?analytics_traffic=internal` for internal checks. Localhost is internal.
@@ -117,8 +117,9 @@ this new funnel.
 
 Cards aggregate 404, runtime/rejection/boundary, validation, calculator submit,
 resource, copy, PDF, project-save, checkout and handled form errors by path,
-version, locale, browser, kind, reason, HTTP status, form and resource category. They contain first/last timestamps, total
-signals and distinct affected sessions, but no raw error text, query values,
+version, locale, browser, kind, reason, HTTP status, form and resource category.
+Resource groups also retain the optional fixed origin/asset classifications. They contain first/last timestamps, total
+signals and distinct collector sessions with signals, not verified affected users, but no raw error text, query values,
 user inputs or session IDs. Paths and private/dynamic segments are sanitized at
 the API boundary, including historical metadata.
 
@@ -145,10 +146,10 @@ do not contaminate calculator validation, failure or abandonment counters.
 | PDF                                       | HTTP status/business codes; transport offline/unresolved/abort/timeout categories. HTTP 200 with non-PDF or empty content is rejected instead of becoming a success. Download initiation is observed, not proof the user saved or opened the file. |
 | Save / checkout / public forms            | Existing catch/callback paths retain safe status/error categories. Login, upgrade and project limits are business blockers, not automatically bugs. Authentication does not export raw provider messages/codes.                                    |
 | Global error / rejection / route boundary | Safe exception classes; no raw message or stack. Unknown errors remain unknown and require reproduction.                                                                                                                                           |
-| Resource loading                          | Capture-phase listener observes non-bubbling errors on image/script/link/media/source elements; records tag only, no asset URL.                                                                                                                    |
+| Resource loading                          | Capture-phase listener observes non-bubbling errors on image/script/link/media/source elements; records tag and optional fixed origin/asset enums, never asset URL/hostname/query or raw message.                                                  |
 
-The collector API independently allowlists `failure_reason`, validity flags,
-status, form and resource categories. It derives the outcome (`failed`, `invalid`,
+The quality evidence API independently allowlists `failure_reason`, validity flags,
+status, form and resource categories from bounded retained custom-event metadata. It derives the outcome (`failed`, `invalid`,
 `blocked`, `cancelled`) rather than trusting a supplied outcome. Requirement cards
 include **observed reason hints**, a scoped follow-up checklist and acceptance
 criteria; they never claim a category establishes the root cause. `AbortError`
@@ -162,6 +163,47 @@ CSV includes `diagnostics_limited`. A noisy resource must not consume the runtim
 budget. Multiple signals can describe one operation; signal count is not a count
 of independent incidents. Summaries export every **retained observation** in the
 selected window, not an assertion that every possible failure was collected.
+
+### Additive diagnostic summary and resource context
+
+`traks-optimization-evidence/v1` now optionally includes `issueSummary`. It is
+computed from the final selected collector-session states after whole-session
+QA/internal classification, not by summing `issues[].sessions`. The summary gives
+`population=selected_collector_sessions`, `eventUnit=retained_event_occurrences`,
+`sessionUnit=distinct_collector_sessions`, `denominatorSessions`, total `events`
+and distinct `sessions`. Its `outcomes` separately reports failed, invalid,
+blocked, cancelled and unavailable/unknown outcomes. Current recognized events
+have known outcomes; `reason=unknown` does not change an observed failure into an
+unknown outcome. `unknownReason` separately counts missing cause evidence.
+
+`resources` reports its own distinct sessions, event signals, `byOrigin` and
+`byAsset`. A session may appear in several outcome/origin/asset groups, so their
+session counts overlap and must not be added into an independent total. Counts
+are retained signals, not failure attempts, verified users, uptime or a critical
+first-party failure rate. Missing summary/subfields in an older response are
+unavailable, not zero; the UI does not reconstruct them from overlapping groups.
+
+Only `resource_load_error` accepts these metadata properties:
+
+- `resource_origin_kind`: `first_party`, `third_party`, `unknown`.
+- `resource_asset_kind`: `app_asset`, `site_asset`, `external_asset`, `unknown`.
+
+Normalized evidence and issue groups add optional camel-case fields
+`resourceOriginKind` and `resourceAssetKind`. Absent or invalid values normalize
+to unknown, including saved old evidence JSON. Tags, page paths and versions are
+not used to guess missing resource origin. Historical v3 data remains unknown;
+new v4 QA/production observations stay distinct. Origin is not a root cause:
+first-party classification does not prove a broken user workflow, and third-party
+classification does not prove blocking or a harmless error. Resource signals do
+not supply HTTP status, resource URLs/hosts, response bodies or stacks.
+
+The existing live DO and historical SQL paths retain/group `event_meta`; both
+are normalized in the API Worker. The collector passes bounded custom metadata
+through, so this additive change needs no SQL/schema/migration or ingest change.
+Review the actual built artifacts before release. Publish the compatible API and
+dashboard consumer before the site producer; do not run a full self-host updater
+just to change these views, since it may also redeploy collect and rewrite cron.
+Local replay/tests are not live production v4 acceptance or proof of business lift.
 
 DNT/GPC and private-target/route exclusions remain in place. No global fetch
 monkey-patch, request/response body logging, input recording or new error service

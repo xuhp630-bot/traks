@@ -1,4 +1,10 @@
-import { issueDiagnosis, type QualityAccumulator, type TrafficSelection } from './quality';
+import {
+  issueDiagnosis,
+  RESOURCE_ORIGIN_LABELS,
+  RESOURCE_ASSET_LABELS,
+  type QualityAccumulator,
+  type TrafficSelection,
+} from './quality';
 
 export type QualityReport = ReturnType<QualityAccumulator['report']>;
 export interface AnalysisScope {
@@ -38,14 +44,18 @@ export function optimizationCandidates(report: QualityReport): OptimizationCandi
               : '失败路径复现',
       path: issue.path,
       version: issue.version,
-      dimension: `${issue.locale} / ${issue.browser} / ${issue.kind} / ${issue.reason}`,
-      observed: `${issue.sessions}个会话、${issue.events}个信号。${diagnosis.evidence}`,
+      dimension:
+        `${issue.locale} / ${issue.browser} / ${issue.kind} / ${issue.reason}` +
+        (issue.kind === 'resource_load_error'
+          ? ` / ${issue.resourceOriginKind ?? 'unknown'} / ${issue.resourceAssetKind ?? 'unknown'}`
+          : ''),
+      observed: `${issue.sessions}个collector会话有${issue.events}个信号（非已核实受影响人数）。${diagnosis.evidence}`,
       hypothesis: '原因分类是线索，不是根因；请补复现步骤、反证和具体修改假设。',
       action: diagnosis.nextCheck,
       verification:
         '使用QA会话复现原路径；验证成功、失败、业务限制、取消及重试。不能通过绕过权限或删除埋点来“消除错误”。',
       metric:
-        '相同页面/版本/语言/设备范围内的受影响会话；另看操作尝试、关联成功、重试后成功和无法关联的信号。',
+        '相同页面/版本/语言/设备范围内有信号的collector会话；另看操作尝试、关联成功、重试后成功和无法关联的信号。',
     };
   });
   for (const operation of report.operations) {
@@ -140,6 +150,8 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
       '页面/版本文本筛选仅影响部分视图，本分析包包含当前流量范围全部分组；上层筛选选择的是匹配会话及其整个观测窗口。',
       '筛选值未导出，比较前须在后台重新核对原筛选；有筛选时不可冒充全站分析。',
       '同一会话可出现在多个页面/操作/失败组，不能把分组求和作为全站独立用户数。',
+      'issueSummary在最终选定会话内去重，事件保留分组multiplicity；结果、原因未知和资源来源未知是不同维度，各子组会话可重叠。',
+      '资源来源/用途只来自白名单分类，历史字段缺失保持unknown；首方信号不证明主流程不可用，第三方信号不证明拦截原因。',
       '关联采用同一会话、页面访问、版本、语言、设备、计算器/操作以及严格递增的接收时间；缺标识、相同时间戳、重复/并发不强行关联。',
       '后续成功只是操作级恢复信号，不证明相同输入、相同付款或网站改动导致改善；checkout_success不是支付成功。',
       '未见返回、窗口外、取消、上报缺失和未标记历史不等于真实流失；小样本不足以做因果结论。',
@@ -187,6 +199,7 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
     },
     operations: report.operations,
     behaviors: report.behaviors,
+    issueSummary: report.issueSummary,
     issues: report.issues.map(({ key: _key, ...issue }) => issue),
     candidates: optimizationCandidates(report),
   };
@@ -194,6 +207,9 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
 
 export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>): string {
   const scope = pack.scope;
+  const summary = pack.issueSummary;
+  const count = (value: unknown): string =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? String(value) : '未知';
   const blocks = [
     '# 网站数据读取与优化行动单',
     `格式：${pack.format}；生成：${pack.generatedAt}`,
@@ -203,6 +219,27 @@ export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>):
     '1. 先核对站点、完整时间窗、流量和筛选；QA/internal/unknown不能混当真实生产用户。\n2. 把配套聚合JSON和本行动单交给分析者，不发送Cookie、令牌或含用户原文的日志。\n3. 先核查数据缺口，再选一条可复现问题；以下均是需求候选，不是自动批准修改。',
     '## 必须保留的解释边界',
     ...pack.limitations.map(value => `- ${value}`),
+    '## 诊断信号去重汇总',
+    ...(summary
+      ? [
+          `${count(summary.denominatorSessions)}个选定collector会话中，${count(summary.sessions)}个会话有${count(summary.events)}个诊断信号；不是已核实用户、故障尝试或可用性比例。`,
+          ...(['failed', 'invalid', 'blocked', 'cancelled', 'unknown'] as const).map(outcome => {
+            const value = summary.outcomes?.[outcome];
+            return `${outcome}：${count(value?.events)}个信号 / ${count(value?.sessions)}个去重会话。`;
+          }),
+          `原因未知：${count(summary.unknownReason?.events)}个信号 / ${count(summary.unknownReason?.sessions)}个会话；原因未知不自动改写已观测结果分类。`,
+          `资源加载信号：${count(summary.resources?.events)}个信号 / ${count(summary.resources?.sessions)}个去重会话。`,
+          ...Object.entries(RESOURCE_ORIGIN_LABELS).map(([origin, label]) => {
+            const value =
+              summary.resources?.byOrigin?.[origin as keyof typeof RESOURCE_ORIGIN_LABELS];
+            return `${label}：${count(value?.events)}个信号 / ${count(value?.sessions)}个会话。`;
+          }),
+          ...Object.entries(RESOURCE_ASSET_LABELS).map(([asset, label]) => {
+            const value = summary.resources?.byAsset?.[asset as keyof typeof RESOURCE_ASSET_LABELS];
+            return `${label}：${count(value?.events)}个信号 / ${count(value?.sessions)}个会话。`;
+          }),
+        ]
+      : ['当前版本未提供去重诊断汇总；不能把缺字段当作0或从重叠问题分组补算。']),
     `## 需求候选（${pack.candidates.length}项，全部导出）`,
   ];
   for (const [index, candidate] of pack.candidates.entries())

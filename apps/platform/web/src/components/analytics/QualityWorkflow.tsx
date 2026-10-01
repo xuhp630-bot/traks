@@ -1,5 +1,11 @@
 import { useState, type ReactElement } from 'react';
-import { optimizationCandidates, type QualityReport } from '@traks/shared';
+import {
+  optimizationCandidates,
+  RESOURCE_ORIGIN_LABELS,
+  RESOURCE_ASSET_LABELS,
+  type QualityReport,
+  type QualityIssueSummary,
+} from '@traks/shared';
 
 const OPERATION_NAMES = {
   calculate: '计算提交',
@@ -8,6 +14,92 @@ const OPERATION_NAMES = {
   save: '保存项目',
   checkout: '创建结账链接（非付款）',
 };
+const summaryCount = (value: unknown): string =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value.toLocaleString('en-US')
+    : '未知';
+
+export function QualitySignalSummary({ summary }: { summary?: QualityIssueSummary }): ReactElement {
+  if (!summary)
+    return (
+      <p role="status" className="mt-4 rounded-xl bg-[#F7F7F3] p-3 text-xs text-[#6E6C7C]">
+        当前版本未提供去重诊断汇总，覆盖待核验；不能把缺字段当作0，也不能把问题分组会话相加补算。
+      </p>
+    );
+  const outcomes = {
+    failed: '失败信号',
+    invalid: '输入校验',
+    blocked: '业务受限',
+    cancelled: '取消操作',
+    unknown: '结果分类未知',
+  } as const;
+  return (
+    <section aria-label="诊断信号去重汇总" className="mt-4 rounded-xl bg-[#F7F7F3] p-3 sm:p-4">
+      <h4 className="text-sm font-semibold text-[#3D3B4F]">诊断信号 · 选定流量去重</h4>
+      <p className="mt-2 text-xs leading-relaxed text-[#6E6C7C]">
+        {summaryCount(summary.denominatorSessions)} 个选定collector会话中，
+        {summaryCount(summary.sessions)} 个会话有 {summaryCount(summary.events)}{' '}
+        个诊断信号。不是已核实受影响人数、独立故障次数或可用性比例。
+      </p>
+      <dl className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {Object.entries(outcomes).map(([key, label]) => {
+          const value = summary.outcomes?.[key as keyof typeof outcomes];
+          return (
+            <div key={key}>
+              <dt className="text-[11px] text-[#6E6C7C]">{label}</dt>
+              <dd className="mt-1 text-sm font-semibold tabular-nums">
+                {summaryCount(value?.events)} 信号 / {summaryCount(value?.sessions)} 会话
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+      <p className="mt-3 text-[11px] leading-relaxed text-[#6E6C7C]">
+        原因未知：{summaryCount(summary.unknownReason?.events)} 信号 /{' '}
+        {summaryCount(summary.unknownReason?.sessions)}{' '}
+        会话；原因未知不改写已观测结果分类。子组会话可重叠，不能求和；无信号不证明无故障。
+      </p>
+      <div className="mt-3 border-t border-[#E6E4DE] pt-3">
+        <h5 className="text-xs font-semibold">
+          资源加载：{summaryCount(summary.resources?.events)} 信号 /{' '}
+          {summaryCount(summary.resources?.sessions)} 个去重会话
+        </h5>
+        <dl className="mt-2 grid gap-2 sm:grid-cols-3">
+          {Object.entries(RESOURCE_ORIGIN_LABELS).map(([key, label]) => {
+            const value = summary.resources?.byOrigin?.[key as keyof typeof RESOURCE_ORIGIN_LABELS];
+            return (
+              <div key={key}>
+                <dt className="text-[11px] text-[#6E6C7C]">{label}</dt>
+                <dd className="mt-1 text-xs font-semibold tabular-nums">
+                  {summaryCount(value?.events)} 信号 / {summaryCount(value?.sessions)} 会话
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer text-[#3D3B4F]">资源用途分类</summary>
+          <dl className="mt-2 grid grid-cols-2 gap-2">
+            {Object.entries(RESOURCE_ASSET_LABELS).map(([key, label]) => {
+              const value = summary.resources?.byAsset?.[key as keyof typeof RESOURCE_ASSET_LABELS];
+              return (
+                <div key={key}>
+                  <dt className="text-[11px] text-[#6E6C7C]">{label}</dt>
+                  <dd className="mt-1 font-semibold tabular-nums">
+                    {summaryCount(value?.events)} 信号 / {summaryCount(value?.sessions)} 会话
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        </details>
+        <p className="mt-3 text-[11px] leading-relaxed text-[#6E6C7C]">
+          历史缺字段保持unknown；首方信号不证明主流程不可用，第三方信号不证明被拦截。不采集资源URL或HTTP状态。
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export function QualityReadingGuide(): ReactElement {
   return (
@@ -24,8 +116,8 @@ export function QualityReadingGuide(): ReactElement {
           Historical / unknown，不要把缺数据理解为零流失。
         </li>
         <li>
-          Sessions导出会话摘要；Calculator funnels看顺序；Error
-          requirements看失败类别；“优化闭环”看尝试、重试及后续成功。
+          Sessions导出会话摘要；Calculator funnels看顺序；Diagnostic
+          requirements分别看失败、校验、业务限制与取消；去重汇总看资源来源；“优化闭环”看尝试、重试及后续成功。
         </li>
         <li>
           从“优化闭环”导出聚合JSON和行动单，交给分析者或上传到当前任务。不发送登录Cookie、令牌或用户输入。
@@ -101,7 +193,7 @@ export function QualityWorkflow({
         <h4 className="text-sm font-semibold">渠道 → 有效操作 → 联系受理与回复许可</h4>
         <p className="mt-2 text-xs leading-relaxed text-[#6E6C7C]">
           首次已观测页面访问归因，按会话去重；不是多触点归因或完整获客漏斗。受理是浏览器观测的服务端响应，
-          不等于送达、合格商机或成交。许可只限本次联系，不是营销订阅。CRM跟进、实际回复和长期留存尚未接通，不填零。
+          不等于送达、合格商机或成交。许可只限本次联系，不是营销订阅。匿名行为未与独立业务聚合关联；跟进、回复和留存请核对独立业务统计，不从匿名事件补算或将未知填零。
         </p>
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
           {report.acquisition.slice(0, growthLimit).map(group => (
@@ -261,7 +353,7 @@ export function QualityWorkflow({
         <h4 className="text-sm font-semibold">优化候选：先验证，再决定</h4>
         <p className="mt-1 text-xs text-[#6E6C7C]">
           已显示 {Math.min(candidateLimit, candidates.length)} / {candidates.length}{' '}
-          项；行动单包含全部及发布/复查记录模板，不会自动改站或创建需求。
+          项；分组可重叠，候选数量不代表已批准问题数量。行动单包含全部及发布/复查记录模板，不会自动改站或创建需求。
         </p>
         {candidates.slice(0, candidateLimit).map((candidate, index) => (
           <article

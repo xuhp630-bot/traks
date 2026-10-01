@@ -2,13 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { QualityAccumulator } from '../packages/shared/src/quality';
+import { QualityAccumulator, normalizeEvidence } from '../packages/shared/src/quality';
 import { buildAnalysisPackage } from '../packages/shared/src/quality-brief';
 import {
   BusinessHealth,
   BusinessReadStatus,
   formatBusinessTimestamp,
 } from '../apps/platform/web/src/components/analytics/BusinessHealth';
+import {
+  QualitySignalSummary,
+  QualityWorkflow,
+} from '../apps/platform/web/src/components/analytics/QualityWorkflow';
 
 const report = () =>
   buildAnalysisPackage(new QualityAccumulator().report('production'), {
@@ -50,6 +54,12 @@ test('empty quality evidence is not uptime or proof of zero faults', () => {
   assert.match(html, /当前未提供同口径经营趋势/);
   assert.doesNotMatch(html, /本轮未接入/);
   assert.doesNotMatch(html, /服务正常|零故障|100%/);
+  const workflow = renderToStaticMarkup(
+    <QualityWorkflow report={new QualityAccumulator().report('production')} onExport={() => {}} />
+  );
+  assert.match(workflow, /匿名行为未与独立业务聚合关联/);
+  assert.match(workflow, /不从匿名事件补算或将未知填零/);
+  assert.doesNotMatch(workflow, /CRM跟进、实际回复和长期留存尚未接通/);
 });
 
 test('scope, build time and mixed-cohort gaps retain distinct labels', () => {
@@ -109,6 +119,67 @@ test('unknown counts and missing issue coverage are not rendered as zero', () =>
   assert.match(html, /异常覆盖未知/);
   assert.match(html, /未知/);
   assert.doesNotMatch(html, /未观测到已分类异常/);
+});
+
+test('legacy packages have unavailable dedup summary instead of invented zero totals', () => {
+  const fixture = report();
+  const { issueSummary: _summary, ...legacy } = fixture;
+  const html = renderToStaticMarkup(<BusinessHealth report={legacy as typeof fixture} />);
+  assert.match(html, /当前版本未提供去重诊断汇总/);
+  assert.match(html, /不能把缺字段当作0/);
+  assert.doesNotMatch(html, /0 个选定collector会话/);
+});
+
+test('quality summary preserves missing subfields as unknown', () => {
+  const summary = report().issueSummary;
+  const incomplete = { ...summary, resources: undefined, outcomes: undefined };
+  const html = renderToStaticMarkup(
+    <QualitySignalSummary summary={incomplete as typeof summary} />
+  );
+  assert.match(html, /未知 信号 \/ 未知 会话/);
+  assert.match(html, /资源来源未知/);
+  assert.doesNotMatch(html, /资源加载：0 信号/);
+});
+
+test('business quality summary shows dedup resource sessions and origin context', () => {
+  const accumulator = new QualityAccumulator();
+  accumulator.add(
+    [
+      ['first_party', 'app_asset', 'fixture-one', 2],
+      ['third_party', 'external_asset', 'fixture-one', 3],
+      ['unknown', 'unknown', 'fixture-two', 4],
+    ].map(([origin, asset, session, count], index) =>
+      normalizeEvidence({
+        ts: Date.parse('2026-09-22T01:00:00.000Z') + index,
+        session_id: session,
+        event_type: 'event',
+        event_name: 'concrete_workflow_resource_load_error',
+        event_count: count,
+        pathname: '/concrete-bag-calculator',
+        event_meta: JSON.stringify({
+          traffic_type: 'production',
+          tracking_version: 'cw-v3',
+          release_version: 'quality-v4',
+          resource_kind: 'script',
+          resource_origin_kind: origin,
+          resource_asset_kind: asset,
+        }),
+      })
+    )
+  );
+  const result = accumulator.report();
+  const fixture = report();
+  fixture.issueSummary = result.issueSummary;
+  fixture.issues = result.issues;
+  const html = renderToStaticMarkup(<BusinessHealth report={fixture} />);
+  assert.match(html, /2 个选定collector会话中，2 个会话有 9 /);
+  assert.match(html, /资源加载：9 信号 \/ 2 个去重会话/);
+  assert.match(html, /首方资源/);
+  assert.match(html, /第三方资源/);
+  assert.match(html, /资源来源未知/);
+  assert.match(html, /应用脚本 \/ 样式/);
+  assert.match(html, /子组会话可重叠/);
+  assert.doesNotMatch(html, /3 个受影响会话|已确认拦截|fixture-one|fixture-two/);
 });
 
 test('failure, business limits, cancellations and validation remain separate signals', () => {

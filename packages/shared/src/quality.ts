@@ -8,6 +8,19 @@ export type UnknownClass =
   | 'pageview_only_unknown'
   | 'legacy_custom_unknown'
   | 'missing_context_unknown';
+export type ResourceOriginKind = 'first_party' | 'third_party' | 'unknown';
+export type ResourceAssetKind = 'app_asset' | 'site_asset' | 'external_asset' | 'unknown';
+export const RESOURCE_ORIGIN_LABELS: Record<ResourceOriginKind, string> = {
+  first_party: '首方资源',
+  third_party: '第三方资源',
+  unknown: '资源来源未知',
+};
+export const RESOURCE_ASSET_LABELS: Record<ResourceAssetKind, string> = {
+  app_asset: '应用脚本 / 样式',
+  site_asset: '站内其他资源',
+  external_asset: '站外资源',
+  unknown: '资源用途未知',
+};
 
 const FAILURE_REASONS = [
   'unknown',
@@ -45,6 +58,7 @@ const FAILURE_REASONS = [
 ] as const;
 type FailureReason = (typeof FAILURE_REASONS)[number];
 type FailureOutcome = 'failed' | 'blocked' | 'cancelled' | 'invalid';
+export type DiagnosticOutcome = FailureOutcome | 'unknown';
 const VALIDATION_REASONS = [
   'required',
   'format',
@@ -100,6 +114,8 @@ export interface EvidenceEvent {
   validationReasons: string;
   formKind: string;
   resourceKind: string;
+  resourceOriginKind?: ResourceOriginKind;
+  resourceAssetKind?: ResourceAssetKind;
   quoteHandoff: boolean;
 }
 
@@ -215,6 +231,9 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
   const reason = FAILURE_REASONS.includes(props.failure_reason as FailureReason)
     ? (props.failure_reason as FailureReason)
     : 'unknown';
+  const resourceSignal = ['resource_load_error', 'concrete_workflow_resource_load_error'].includes(
+    String(row.event_name)
+  );
   return {
     channelSource: channelLabel(row.utm_source || row.referrer_hostname, 'direct_or_unattributed'),
     channelMedium: channelLabel(row.utm_medium, 'unattributed'),
@@ -323,6 +342,18 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
     )
       ? String(props.resource_kind)
       : '',
+    resourceOriginKind:
+      resourceSignal &&
+      typeof props.resource_origin_kind === 'string' &&
+      ['first_party', 'third_party'].includes(props.resource_origin_kind)
+        ? (props.resource_origin_kind as ResourceOriginKind)
+        : 'unknown',
+    resourceAssetKind:
+      resourceSignal &&
+      typeof props.resource_asset_kind === 'string' &&
+      ['app_asset', 'site_asset', 'external_asset'].includes(props.resource_asset_kind)
+        ? (props.resource_asset_kind as ResourceAssetKind)
+        : 'unknown',
     quoteHandoff:
       row.event_name === 'concrete_workflow_result_cta_click' &&
       ['/concrete-quote-reviewer', '/concrete-contractor-bid-comparison'].includes(
@@ -372,10 +403,59 @@ export interface QualityIssue {
   validationReasons: string;
   formKind: string;
   resourceKind: string;
+  resourceOriginKind?: ResourceOriginKind;
+  resourceAssetKind?: ResourceAssetKind;
   events: number;
   sessions: number;
   firstAt: number;
   lastAt: number;
+}
+
+export interface DiagnosticSignalCount {
+  events: number;
+  sessions: number;
+}
+
+export interface QualityIssueSummary extends DiagnosticSignalCount {
+  population: 'selected_collector_sessions';
+  eventUnit: 'retained_event_occurrences';
+  sessionUnit: 'distinct_collector_sessions';
+  denominatorSessions: number;
+  outcomes: Record<DiagnosticOutcome, DiagnosticSignalCount>;
+  unknownReason: DiagnosticSignalCount;
+  resources: DiagnosticSignalCount & {
+    byOrigin: Record<ResourceOriginKind, DiagnosticSignalCount>;
+    byAsset: Record<ResourceAssetKind, DiagnosticSignalCount>;
+  };
+}
+
+function emptyIssueSummary(): QualityIssueSummary {
+  const count = (): DiagnosticSignalCount => ({ events: 0, sessions: 0 });
+  return {
+    population: 'selected_collector_sessions',
+    eventUnit: 'retained_event_occurrences',
+    sessionUnit: 'distinct_collector_sessions',
+    denominatorSessions: 0,
+    ...count(),
+    outcomes: {
+      failed: count(),
+      invalid: count(),
+      blocked: count(),
+      cancelled: count(),
+      unknown: count(),
+    },
+    unknownReason: count(),
+    resources: {
+      ...count(),
+      byOrigin: { first_party: count(), third_party: count(), unknown: count() },
+      byAsset: {
+        app_asset: count(),
+        site_asset: count(),
+        external_asset: count(),
+        unknown: count(),
+      },
+    },
+  };
 }
 
 interface SessionState {
@@ -595,6 +675,14 @@ export class QualityAccumulator {
         if (action === 'form_abandoned' && event.formKind === 'calculator') funnel.abandoned = true;
       }
       if (failure) {
+        const resourceOriginKind =
+          failure.kind === 'resource_load_error'
+            ? (event.resourceOriginKind ?? 'unknown')
+            : 'unknown';
+        const resourceAssetKind =
+          failure.kind === 'resource_load_error'
+            ? (event.resourceAssetKind ?? 'unknown')
+            : 'unknown';
         const key = JSON.stringify([
           event.path,
           event.version,
@@ -606,6 +694,9 @@ export class QualityAccumulator {
           event.validationReasons,
           event.formKind,
           event.resourceKind,
+          ...(resourceOriginKind !== 'unknown' || resourceAssetKind !== 'unknown'
+            ? [resourceOriginKind, resourceAssetKind]
+            : []),
         ]);
         const issue = state.issues.get(key) ?? {
           key,
@@ -618,6 +709,8 @@ export class QualityAccumulator {
           validationReasons: event.validationReasons,
           formKind: event.formKind,
           resourceKind: event.resourceKind,
+          resourceOriginKind,
+          resourceAssetKind,
           events: 0,
           sessions: 1,
           firstAt: event.ts,
@@ -645,12 +738,20 @@ export class QualityAccumulator {
     const sessions: QualitySession[] = [];
     const funnels = new Map<string, CalculatorFunnel>();
     const issues = new Map<string, QualityIssue>();
+    const issueSummary = emptyIssueSummary();
     for (const state of this.sessions.values()) {
       classification[state.summary.traffic] += 1;
       if (state.summary.traffic === 'unknown' && state.summary.unknownReason)
         unknownClassification[state.summary.unknownReason] += 1;
       if (traffic !== 'all' && state.summary.traffic !== traffic) continue;
       sessions.push(state.summary);
+      issueSummary.denominatorSessions += 1;
+      issueSummary.sessions += Number(state.issues.size > 0);
+      const outcomes = new Set<DiagnosticOutcome>();
+      const resourceOrigins = new Set<ResourceOriginKind>();
+      const resourceAssets = new Set<ResourceAssetKind>();
+      let hasUnknownReason = false;
+      let hasResource = false;
       for (const [key, funnel] of state.funnels) {
         const result = funnels.get(key) ?? {
           ...funnel.group,
@@ -672,6 +773,24 @@ export class QualityAccumulator {
         funnels.set(key, result);
       }
       for (const [key, issue] of state.issues) {
+        const outcome = issue.outcome ?? 'unknown';
+        issueSummary.events += issue.events;
+        issueSummary.outcomes[outcome].events += issue.events;
+        outcomes.add(outcome);
+        if (issue.reason === 'unknown') {
+          issueSummary.unknownReason.events += issue.events;
+          hasUnknownReason = true;
+        }
+        if (issue.kind === 'resource_load_error') {
+          const origin = issue.resourceOriginKind ?? 'unknown';
+          const asset = issue.resourceAssetKind ?? 'unknown';
+          issueSummary.resources.events += issue.events;
+          issueSummary.resources.byOrigin[origin].events += issue.events;
+          issueSummary.resources.byAsset[asset].events += issue.events;
+          hasResource = true;
+          resourceOrigins.add(origin);
+          resourceAssets.add(asset);
+        }
         const previous = issues.get(key);
         issues.set(
           key,
@@ -686,6 +805,11 @@ export class QualityAccumulator {
             : { ...issue }
         );
       }
+      for (const outcome of outcomes) issueSummary.outcomes[outcome].sessions += 1;
+      issueSummary.unknownReason.sessions += Number(hasUnknownReason);
+      issueSummary.resources.sessions += Number(hasResource);
+      for (const origin of resourceOrigins) issueSummary.resources.byOrigin[origin].sessions += 1;
+      for (const asset of resourceAssets) issueSummary.resources.byAsset[asset].sessions += 1;
     }
     sessions.sort(
       (first, second) =>
@@ -699,6 +823,7 @@ export class QualityAccumulator {
       entryFunnels: this.entryFunnels.report(new Set(sessions.map(session => session.sessionId))),
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),
       funnels: [...funnels.values()],
+      issueSummary,
       issues: [...issues.values()].sort((first, second) => second.sessions - first.sessions),
       unassociatedEvents: this.unassociatedEvents,
     };
@@ -776,6 +901,19 @@ export function issueDiagnosis(issue: QualityIssue): { evidence: string; nextChe
       evidence: `浏览器能力或权限信号：${reason}。`,
       nextCheck: '检查 HTTPS、安全上下文、剪贴板权限、用户手势和嵌入限制，并验证手动复制替代路径。',
     };
+  if (issue.kind === 'resource_load_error') {
+    const origin = issue.resourceOriginKind ?? 'unknown';
+    const asset = issue.resourceAssetKind ?? 'unknown';
+    return {
+      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；未记录资源URL、HTTP状态或根因。`,
+      nextCheck:
+        origin === 'first_party'
+          ? '在相同版本核对首方资源响应、缓存与浏览器控制台；应用资源分类不证明页面已不可用，须复现实际操作影响。'
+          : origin === 'third_party'
+            ? '核对第三方资源是否必要及正常/隐私拦截环境下的降级行为；加载错误不证明网站主流程失败，也不证明已被拦截。'
+            : '历史或缺失来源保持未知；使用新版本QA区分首方、第三方与未知资源，再决定排查顺序，不能把全部资源信号算作首方故障。',
+    };
+  }
   if (['offline', 'network_unresolved', 'timeout', 'resource_load'].includes(reason))
     return {
       evidence:
@@ -807,7 +945,7 @@ export function issueMarkdown(
     `- 状态：${review}（本机人工复核；非自动故障判定）\n- 复核时间：${reviewedAt ? new Date(reviewedAt).toISOString() : '未复核'}\n` +
     `- 流量范围：${traffic}\n- 版本：${issue.version}\n- 语言 / 浏览器：${issue.locale} / ${issue.browser}\n` +
     `- 结果分类：${issue.outcome}；原因分类：${issue.reason}；表单：${issue.formKind}\n` +
-    `- 受影响会话：${issue.sessions}；事件：${issue.events}\n- 首次：${new Date(issue.firstAt).toISOString()}\n- 末次：${new Date(issue.lastAt).toISOString()}\n\n` +
+    `- 有信号的collector会话：${issue.sessions}；事件信号：${issue.events}（不是已核实受影响人数）\n- 首次：${new Date(issue.firstAt).toISOString()}\n- 末次：${new Date(issue.lastAt).toISOString()}\n\n` +
     `## 原因线索（非根因结论）\n${diagnosis.evidence}\n\n## 建议核查\n${diagnosis.nextCheck}\n\n` +
     `## 待补复现\n1. 在对应版本与浏览器打开 ${issue.path}。\n2. 人工补充不含用户原文的操作步骤。\n3. 记录预期与实际结果；历史事件不证明当前仍有故障。\n\n` +
     `## 验收标准\n- 满足业务前提时原操作可完成；预期校验/权限/取消须有正确提示和恢复路径。\n- 成功与失败分别验证，重试成功不能抹掉先前的失败信号。\n- 新错误与旧版本信号分开；新事件晚于复核时间则重新核查。\n- 不采集输入原文、凭据或可识别个人信息。\n\n证据仅含脱敏聚合，不含会话原始标识；信号次数不等于独立故障次数。\n`

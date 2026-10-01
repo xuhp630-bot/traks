@@ -10,13 +10,15 @@ import {
   analysisMarkdown,
   loadCompleteEvidence,
   sessionsCsv,
+  RESOURCE_ORIGIN_LABELS,
+  RESOURCE_ASSET_LABELS,
   type EvidencePage,
   type Period,
   type QualityIssue,
   type TrafficSelection,
 } from '@traks/shared';
 import { api, type AnalyticsFilters } from '@/lib/api';
-import { QualityReadingGuide, QualityWorkflow } from './QualityWorkflow';
+import { QualityReadingGuide, QualityWorkflow, QualitySignalSummary } from './QualityWorkflow';
 
 const CONTROL =
   'min-h-11 rounded-xl border border-[#E6E4DE] bg-white px-3 py-2 text-sm text-[#3D3B4F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#467B64] disabled:cursor-not-allowed disabled:opacity-50';
@@ -94,7 +96,7 @@ function IssueCard({
         {issue.version} · {issue.locale} · {issue.browser}
       </p>
       <p className="mt-3 text-sm">
-        {issue.sessions} affected sessions · {issue.events} signals
+        {issue.sessions} collector sessions with signals · {issue.events} signals
       </p>
       <div className="mt-3 rounded-xl bg-[#F7F6F2] p-3 text-xs leading-relaxed">
         <p className="font-semibold break-words">
@@ -102,6 +104,12 @@ function IssueCard({
           {issue.httpStatus ? ` · HTTP ${issue.httpStatus}` : ''}
         </p>
         {issue.formKind !== 'unknown' && <p>Form: {issue.formKind}</p>}
+        {issue.kind === 'resource_load_error' && (
+          <p className="mt-2">
+            {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
+            {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
+          </p>
+        )}
         <p className="mt-2">原因线索（非根因结论）：{diagnosis.evidence}</p>
         <p className="mt-2 text-[#6E6C7C]">建议核查：{diagnosis.nextCheck}</p>
       </div>
@@ -237,10 +245,10 @@ export function QualityConsole({
         </button>
       </div>
       <p className="mt-4 rounded-xl bg-[#F5F5F0] px-3 py-2 text-[11px] leading-relaxed text-[#6E6C7C]">
-        This section has its own traffic filter. The overview, trends and legacy diagnostics keep
-        their original population (including QA / unknown). Dashboard filters select matching
-        sessions; this analysis reads their whole observed window. Production labels do not prove
-        human or organic traffic.
+        This section has its own traffic filter. Raw overview / trends and legacy diagnostics keep
+        their mixed population (including QA / unknown); the business overview is separate.
+        Dashboard filters select matching sessions; this analysis reads their whole observed window.
+        Production labels do not prove human or organic traffic.
       </p>
       <QualityReadingGuide />
       <div className="mt-4 flex flex-wrap items-end gap-3">
@@ -338,6 +346,7 @@ export function QualityConsole({
             analysis. Export covers observed session summaries in this window, not entire lifetime
             histories.
           </p>
+          <QualitySignalSummary summary={report.issueSummary} />
           <div
             className="mt-5 flex flex-wrap gap-2"
             role="group"
@@ -355,7 +364,7 @@ export function QualityConsole({
                   : value === 'funnels'
                     ? 'Calculator funnels'
                     : value === 'issues'
-                      ? 'Error requirements'
+                      ? 'Diagnostic requirements'
                       : '优化闭环'}
               </button>
             ))}
@@ -560,7 +569,9 @@ export function QualityConsole({
                     messages, URL queries or session IDs enter requirement cards. Reviews are
                     manual, local to this browser and never inferred from HTTP 200. Failure,
                     validation, business blockers and cancellation stay separate. Signals are not
-                    unique failure attempts; later success does not erase failures.
+                    unique failure attempts or verified affected users; later success does not erase
+                    failures. The deduplicated summary covers the selected traffic, not this
+                    path/version preview.
                   </p>
                   <div className="grid gap-3 lg:grid-cols-2">
                     {visibleIssues.map(issue => (

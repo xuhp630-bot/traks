@@ -1,6 +1,11 @@
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import type { ReactElement } from 'react';
-import type { buildAnalysisPackage } from '@traks/shared';
+import {
+  RESOURCE_ORIGIN_LABELS,
+  RESOURCE_ASSET_LABELS,
+  type buildAnalysisPackage,
+} from '@traks/shared';
+import { QualitySignalSummary } from './QualityWorkflow';
 
 type BusinessReport = ReturnType<typeof buildAnalysisPackage>;
 const CONTROL =
@@ -185,6 +190,7 @@ export function BusinessHealth({
       <p className="mt-3 text-base text-[#6E6C7C] sm:text-sm">
         未关联事件来自全窗口（含 QA、内部与未知流量），不是生产失败数；诊断受限表示信号可能不完整。
       </p>
+      <QualitySignalSummary summary={report.issueSummary} />
       {!issues ? (
         <p className="mt-4 text-base sm:text-sm">异常覆盖未知，不能按零解释。</p>
       ) : issues.length === 0 ? (
@@ -208,6 +214,12 @@ export function BusinessHealth({
                   {issue.kind} · {REASONS[issue.reason] ?? '原因未知'}
                   {issue.httpStatus ? ` · HTTP ${issue.httpStatus}` : ''}
                 </p>
+                {issue.kind === 'resource_load_error' && (
+                  <p className="break-words text-xs text-[#6E6C7C]">
+                    {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
+                    {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
+                  </p>
+                )}
                 <p className="break-words text-base text-[#6E6C7C] sm:text-sm">
                   {issue.version} · {issue.locale} · {issue.browser}
                 </p>
