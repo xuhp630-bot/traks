@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QualityAccumulator, normalizeEvidence } from '../packages/shared/src/quality';
@@ -180,6 +181,56 @@ test('business quality summary shows dedup resource sessions and origin context'
   assert.match(html, /应用脚本 \/ 样式/);
   assert.match(html, /子组会话可重叠/);
   assert.doesNotMatch(html, /3 个受影响会话|已确认拦截|fixture-one|fixture-two/);
+});
+
+test('resource hints show safe supplier and observed network without claiming root causes', () => {
+  const accumulator = new QualityAccumulator();
+  accumulator.add(
+    ['online', 'offline', undefined].map((network, index) =>
+      normalizeEvidence({
+        ts: index + 1,
+        session_id: 'fixture-resource',
+        event_type: 'event',
+        event_name: 'concrete_workflow_resource_load_error',
+        event_count: 1,
+        pathname: `/resource-${index}`,
+        event_meta: JSON.stringify({
+          traffic_type: 'production',
+          tracking_version: 'cw-v3',
+          release_version: 'quality-v7',
+          resource_origin_kind: 'third_party',
+          resource_asset_kind: 'external_asset',
+          resource_provider: network ? 'google_tag' : undefined,
+          network_state: network,
+          resource_url: 'https://private.invalid/?SECRET_QUERY',
+        }),
+      })
+    )
+  );
+  const result = accumulator.report();
+  const fixture = report();
+  fixture.issueSummary = result.issueSummary;
+  fixture.issues = result.issues;
+  const html = renderToStaticMarkup(<BusinessHealth report={fixture} />);
+  assert.match(html, /供应商：Google 标签/);
+  assert.match(html, /供应商：供应商未知/);
+  assert.match(html, /网络观测：浏览器报告在线（不证明资源可达）/);
+  assert.match(html, /网络观测：浏览器报告离线（非根因结论）/);
+  assert.match(html, /网络观测：网络状态未知/);
+  assert.match(html, /原因线索，非根因/);
+  assert.doesNotMatch(html, /private.invalid|SECRET_|fixture-resource|已确认拦截|已确认离线根因/);
+});
+
+test('full quality console uses the same bounded supplier and network labels', () => {
+  const source = readFileSync(
+    new URL('../apps/platform/web/src/components/analytics/QualityConsole.tsx', import.meta.url),
+    'utf8'
+  );
+  assert.match(source, /RESOURCE_PROVIDER_LABELS\[issue\.resourceProvider \?\? 'unknown'\]/);
+  assert.match(source, /RESOURCE_NETWORK_LABELS\[issue\.networkState \?\? 'unknown'\]/);
+  assert.match(source, /供应商/);
+  assert.match(source, /网络观测/);
+  assert.doesNotMatch(source, /issue\.resource_url|issue\.event_meta|issue\.properties/);
 });
 
 test('failure, business limits, cancellations and validation remain separate signals', () => {

@@ -12,6 +12,8 @@ import {
   sessionsCsv,
   RESOURCE_ORIGIN_LABELS,
   RESOURCE_ASSET_LABELS,
+  RESOURCE_PROVIDER_LABELS,
+  RESOURCE_NETWORK_LABELS,
   type EvidencePage,
   type Period,
   type QualityIssue,
@@ -105,10 +107,16 @@ function IssueCard({
         </p>
         {issue.formKind !== 'unknown' && <p>Form: {issue.formKind}</p>}
         {issue.kind === 'resource_load_error' && (
-          <p className="mt-2">
-            {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
-            {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
-          </p>
+          <>
+            <p className="mt-2">
+              {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
+              {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
+            </p>
+            <p className="mt-2">
+              供应商：{RESOURCE_PROVIDER_LABELS[issue.resourceProvider ?? 'unknown']} · 网络观测：
+              {RESOURCE_NETWORK_LABELS[issue.networkState ?? 'unknown']}
+            </p>
+          </>
         )}
         <p className="mt-2">原因线索（非根因结论）：{diagnosis.evidence}</p>
         <p className="mt-2 text-[#6E6C7C]">建议核查：{diagnosis.nextCheck}</p>

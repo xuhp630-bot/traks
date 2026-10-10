@@ -10,6 +10,18 @@ export type UnknownClass =
   | 'missing_context_unknown';
 export type ResourceOriginKind = 'first_party' | 'third_party' | 'unknown';
 export type ResourceAssetKind = 'app_asset' | 'site_asset' | 'external_asset' | 'unknown';
+export type ResourceProvider =
+  | 'google_tag'
+  | 'google_tag_manager'
+  | 'google_adsense'
+  | 'google_ad_quality'
+  | 'microsoft_clarity'
+  | 'cloudflare_beacon'
+  | 'traks'
+  | 'other_external'
+  | 'first_party'
+  | 'unknown';
+export type ResourceNetworkState = 'online' | 'offline' | 'unknown';
 export const RESOURCE_ORIGIN_LABELS: Record<ResourceOriginKind, string> = {
   first_party: '首方资源',
   third_party: '第三方资源',
@@ -20,6 +32,23 @@ export const RESOURCE_ASSET_LABELS: Record<ResourceAssetKind, string> = {
   site_asset: '站内其他资源',
   external_asset: '站外资源',
   unknown: '资源用途未知',
+};
+export const RESOURCE_PROVIDER_LABELS: Record<ResourceProvider, string> = {
+  google_tag: 'Google 标签',
+  google_tag_manager: 'Google 标签管理器',
+  google_adsense: 'Google AdSense',
+  google_ad_quality: 'Google 广告质量',
+  microsoft_clarity: 'Microsoft Clarity',
+  cloudflare_beacon: 'Cloudflare 测量脚本',
+  traks: 'Traks 测量脚本',
+  other_external: '其他站外资源',
+  first_party: '首方资源',
+  unknown: '供应商未知',
+};
+export const RESOURCE_NETWORK_LABELS: Record<ResourceNetworkState, string> = {
+  online: '浏览器报告在线（不证明资源可达）',
+  offline: '浏览器报告离线（非根因结论）',
+  unknown: '网络状态未知',
 };
 
 const FAILURE_REASONS = [
@@ -116,6 +145,8 @@ export interface EvidenceEvent {
   resourceKind: string;
   resourceOriginKind?: ResourceOriginKind;
   resourceAssetKind?: ResourceAssetKind;
+  resourceProvider?: ResourceProvider;
+  networkState?: ResourceNetworkState;
   quoteHandoff: boolean;
 }
 
@@ -354,6 +385,18 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
       ['app_asset', 'site_asset', 'external_asset'].includes(props.resource_asset_kind)
         ? (props.resource_asset_kind as ResourceAssetKind)
         : 'unknown',
+    resourceProvider:
+      resourceSignal &&
+      typeof props.resource_provider === 'string' &&
+      Object.hasOwn(RESOURCE_PROVIDER_LABELS, props.resource_provider)
+        ? (props.resource_provider as ResourceProvider)
+        : 'unknown',
+    networkState:
+      resourceSignal &&
+      typeof props.network_state === 'string' &&
+      Object.hasOwn(RESOURCE_NETWORK_LABELS, props.network_state)
+        ? (props.network_state as ResourceNetworkState)
+        : 'unknown',
     quoteHandoff:
       row.event_name === 'concrete_workflow_result_cta_click' &&
       ['/concrete-quote-reviewer', '/concrete-contractor-bid-comparison'].includes(
@@ -405,6 +448,8 @@ export interface QualityIssue {
   resourceKind: string;
   resourceOriginKind?: ResourceOriginKind;
   resourceAssetKind?: ResourceAssetKind;
+  resourceProvider?: ResourceProvider;
+  networkState?: ResourceNetworkState;
   events: number;
   sessions: number;
   firstAt: number;
@@ -683,6 +728,12 @@ export class QualityAccumulator {
           failure.kind === 'resource_load_error'
             ? (event.resourceAssetKind ?? 'unknown')
             : 'unknown';
+        const resourceProvider =
+          failure.kind === 'resource_load_error'
+            ? (event.resourceProvider ?? 'unknown')
+            : 'unknown';
+        const networkState =
+          failure.kind === 'resource_load_error' ? (event.networkState ?? 'unknown') : 'unknown';
         const key = JSON.stringify([
           event.path,
           event.version,
@@ -696,6 +747,9 @@ export class QualityAccumulator {
           event.resourceKind,
           ...(resourceOriginKind !== 'unknown' || resourceAssetKind !== 'unknown'
             ? [resourceOriginKind, resourceAssetKind]
+            : []),
+          ...(resourceProvider !== 'unknown' || networkState !== 'unknown'
+            ? ['resource_context_v1', resourceProvider, networkState]
             : []),
         ]);
         const issue = state.issues.get(key) ?? {
@@ -711,6 +765,8 @@ export class QualityAccumulator {
           resourceKind: event.resourceKind,
           resourceOriginKind,
           resourceAssetKind,
+          resourceProvider,
+          networkState,
           events: 0,
           sessions: 1,
           firstAt: event.ts,
@@ -904,8 +960,10 @@ export function issueDiagnosis(issue: QualityIssue): { evidence: string; nextChe
   if (issue.kind === 'resource_load_error') {
     const origin = issue.resourceOriginKind ?? 'unknown';
     const asset = issue.resourceAssetKind ?? 'unknown';
+    const provider = issue.resourceProvider ?? 'unknown';
+    const network = issue.networkState ?? 'unknown';
     return {
-      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；未记录资源URL、HTTP状态或根因。`,
+      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；供应商：${RESOURCE_PROVIDER_LABELS[provider]}；网络观测：${RESOURCE_NETWORK_LABELS[network]}。未记录资源URL、HTTP状态或根因；历史缺字段保持未知。`,
       nextCheck:
         origin === 'first_party'
           ? '在相同版本核对首方资源响应、缓存与浏览器控制台；应用资源分类不证明页面已不可用，须复现实际操作影响。'

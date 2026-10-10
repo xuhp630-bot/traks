@@ -69,6 +69,205 @@ test('resource metadata accepts only fixed enums on resource loading events', ()
   assert.equal(unrelated.resourceAssetKind, 'unknown');
 });
 
+test('resource supplier and observed network accept fixed enums only on resource errors', () => {
+  for (const provider of [
+    'google_tag',
+    'google_tag_manager',
+    'google_adsense',
+    'google_ad_quality',
+    'microsoft_clarity',
+    'cloudflare_beacon',
+    'traks',
+    'other_external',
+    'first_party',
+    'unknown',
+  ]) {
+    for (const network of ['online', 'offline', 'unknown']) {
+      const normalized = event('resource_load_error', 1, {
+        resource_provider: provider,
+        network_state: network,
+      });
+      assert.equal(normalized.resourceProvider, provider);
+      assert.equal(normalized.networkState, network);
+    }
+  }
+  for (const value of [
+    undefined,
+    null,
+    [],
+    {},
+    1,
+    true,
+    'Google_tag',
+    'google_tag ',
+    'https://private.invalid/?SECRET_QUERY',
+    'private.invalid',
+    '<script>SECRET_BODY</script>',
+    '__proto__',
+  ]) {
+    const normalized = event('resource_load_error', 1, {
+      resource_provider: value,
+      network_state: value,
+    });
+    assert.equal(normalized.resourceProvider, 'unknown');
+    assert.equal(normalized.networkState, 'unknown');
+    assert.doesNotMatch(JSON.stringify(normalized), /SECRET_|private.invalid|<script>/);
+  }
+  const unrelated = event('journey_error', 1, {
+    resource_provider: 'google_tag',
+    network_state: 'offline',
+  });
+  assert.equal(unrelated.resourceProvider, 'unknown');
+  assert.equal(unrelated.networkState, 'unknown');
+  const alias = normalizeEvidence({
+    ts: 1,
+    session_id: 'fixture',
+    event_count: 1,
+    event_name: 'resource_load_error',
+    event_meta: JSON.stringify({ resource_provider: 'traks', network_state: 'online' }),
+  });
+  assert.equal(alias.resourceProvider, 'traks');
+  assert.equal(alias.networkState, 'online');
+});
+
+test('new supplier/network evidence splits groups without changing legacy keys or totals', () => {
+  const props = { resource_origin_kind: 'third_party', resource_asset_kind: 'external_asset' };
+  const legacy = event('resource_load_error', 1, props, { count: 3 });
+  const old = report([legacy]);
+  const compatible = report([
+    legacy,
+    event(
+      'resource_load_error',
+      2,
+      { ...props, resource_provider: 'unknown', network_state: 'unknown' },
+      { count: 4 }
+    ),
+    event(
+      'resource_load_error',
+      3,
+      { ...props, resource_provider: 'private.invalid', network_state: 'SECRET_NETWORK' },
+      { count: 2 }
+    ),
+  ]);
+  assert.equal(compatible.issues.length, 1);
+  assert.equal(compatible.issues[0].key, old.issues[0].key);
+  assert.equal(compatible.issues[0].events, 9);
+  assert.equal(compatible.issues[0].resourceProvider, 'unknown');
+  assert.equal(compatible.issues[0].networkState, 'unknown');
+
+  const enriched = report([
+    legacy,
+    event(
+      'resource_load_error',
+      2,
+      { ...props, resource_provider: 'google_tag', network_state: 'online' },
+      { count: 4 }
+    ),
+    event(
+      'resource_load_error',
+      3,
+      { ...props, resource_provider: 'google_tag', network_state: 'offline' },
+      { count: 2 }
+    ),
+    event(
+      'resource_load_error',
+      4,
+      { ...props, resource_provider: 'microsoft_clarity', network_state: 'online' },
+      { count: 4 }
+    ),
+  ]);
+  assert.equal(enriched.issues.length, 4);
+  assert.equal(
+    enriched.issues.find(issue => issue.resourceProvider === 'unknown')?.key,
+    old.issues[0].key
+  );
+  assert.equal(enriched.issueSummary.events, 13);
+  assert.equal(enriched.issueSummary.sessions, 1);
+  assert.deepEqual(enriched.issueSummary.outcomes.failed, { events: 13, sessions: 1 });
+  assert.deepEqual(enriched.issueSummary.resources.byOrigin.third_party, {
+    events: 13,
+    sessions: 1,
+  });
+  assert.ok(
+    enriched.issues.every(issue => issue.reason === 'resource_load' && issue.outcome === 'failed')
+  );
+  const distinct = report([
+    event('resource_load_error', 1, { resource_origin_kind: 'first_party' }),
+    event('resource_load_error', 2, { resource_provider: 'first_party' }),
+    event('resource_load_error', 3, { network_state: 'online' }),
+  ]);
+  assert.equal(
+    distinct.issues.length,
+    3,
+    'new metadata suffix must not collide with legacy origin/asset key slots'
+  );
+  const { resourceProvider: _provider, networkState: _network, ...oldJson } = legacy;
+  assert.equal(report([oldJson]).issues[0].key, old.issues[0].key);
+});
+
+test('thirteen historical signals remain seven unknown-supplier groups and export no raw data', () => {
+  const historic = report(
+    [3, 1, 2, 4, 1, 1, 1].map((count, index) =>
+      event(
+        'resource_load_error',
+        index + 1,
+        {
+          resource_origin_kind: 'third_party',
+          resource_asset_kind: 'external_asset',
+        },
+        { path: `/fixture-${index}`, count }
+      )
+    )
+  );
+  assert.equal(historic.issues.length, 7);
+  assert.equal(historic.issueSummary.events, 13);
+  assert.ok(
+    historic.issues.every(
+      issue => issue.resourceProvider === 'unknown' && issue.networkState === 'unknown'
+    )
+  );
+  const pack = buildAnalysisPackage(
+    report([
+      event('resource_load_error', 1, {
+        resource_provider: 'google_ad_quality',
+        network_state: 'online',
+        resource_url: 'https://private.invalid/?SECRET_QUERY',
+        error_message: 'SECRET_MESSAGE',
+      }),
+    ]),
+    {
+      siteId: 'fixture-site',
+      period: '7d',
+      traffic: 'production',
+      from: 0,
+      to: 100,
+      source: 'historical',
+      totalGroups: 1,
+      totalEvents: 1,
+      cohortFilterKeys: [],
+    }
+  );
+  assert.equal(pack.issues[0].resourceProvider, 'google_ad_quality');
+  assert.equal(pack.issues[0].networkState, 'online');
+  assert.match(pack.candidates[0].dimension, /google_ad_quality.*online/);
+  assert.match(analysisMarkdown(pack), /供应商.*网络/);
+  assert.match(
+    issueDiagnosis(
+      report([
+        event('resource_load_error', 1, {
+          resource_provider: 'google_tag',
+          network_state: 'offline',
+        }),
+      ]).issues[0]
+    ).evidence,
+    /浏览器报告离线/
+  );
+  assert.doesNotMatch(
+    JSON.stringify(pack),
+    /SECRET_|private.invalid|fixture-one|sessionId|pageId|resource_url|error_message/
+  );
+});
+
 test('historical resource evidence stays unknown without guessing from script or route', () => {
   const legacy = event('resource_load_error', 1, {
     release_version: 'quality-v3',

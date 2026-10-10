@@ -3,6 +3,8 @@ import type { ReactElement } from 'react';
 import {
   RESOURCE_ORIGIN_LABELS,
   RESOURCE_ASSET_LABELS,
+  RESOURCE_PROVIDER_LABELS,
+  RESOURCE_NETWORK_LABELS,
   type buildAnalysisPackage,
 } from '@traks/shared';
 import { QualitySignalSummary } from './QualityWorkflow';
@@ -215,10 +217,16 @@ export function BusinessHealth({
                   {issue.httpStatus ? ` · HTTP ${issue.httpStatus}` : ''}
                 </p>
                 {issue.kind === 'resource_load_error' && (
-                  <p className="break-words text-xs text-[#6E6C7C]">
-                    {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
-                    {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
-                  </p>
+                  <>
+                    <p className="break-words text-xs text-[#6E6C7C]">
+                      {RESOURCE_ORIGIN_LABELS[issue.resourceOriginKind ?? 'unknown']} ·{' '}
+                      {RESOURCE_ASSET_LABELS[issue.resourceAssetKind ?? 'unknown']}
+                    </p>
+                    <p className="break-words text-xs text-[#6E6C7C]">
+                      供应商：{RESOURCE_PROVIDER_LABELS[issue.resourceProvider ?? 'unknown']} ·
+                      网络观测：{RESOURCE_NETWORK_LABELS[issue.networkState ?? 'unknown']}
+                    </p>
+                  </>
                 )}
                 <p className="break-words text-base text-[#6E6C7C] sm:text-sm">
                   {issue.version} · {issue.locale} · {issue.browser}
