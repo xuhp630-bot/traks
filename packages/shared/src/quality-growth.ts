@@ -18,7 +18,13 @@ type Entry = Pick<
   EvidenceEvent,
   'path' | 'locale' | 'device' | 'channelSource' | 'channelMedium' | 'channelCampaign'
 >;
-type GrowthSession = { entry?: Entry; signals: Set<GrowthSignal>; versions: Set<string> };
+type GrowthSession = {
+  entry?: Entry;
+  signals: Set<GrowthSignal>;
+  versions: Set<string>;
+  calculatorObserved: boolean;
+  calculatorSignals: Set<GrowthSignal>;
+};
 export type GrowthGroup = Entry &
   Record<GrowthSignal, number> & {
     sessions: number;
@@ -33,6 +39,8 @@ export class GrowthAccumulator {
     const session: GrowthSession = this.sessions.get(event.sessionId) ?? {
       signals: new Set<GrowthSignal>(),
       versions: new Set<string>(),
+      calculatorObserved: false,
+      calculatorSignals: new Set<GrowthSignal>(),
     };
     this.sessions.set(event.sessionId, session);
     if (event.eventType === 'pageview' && !session.entry) {
@@ -47,6 +55,15 @@ export class GrowthAccumulator {
     }
     if (event.version === 'unknown') return;
     session.versions.add(event.version);
+    if (event.calculator !== 'unknown' && event.eventType !== 'pageview') {
+      session.calculatorObserved = true;
+      if (action === 'calculator_submit_success')
+        session.calculatorSignals.add('toolSuccessSessions');
+      if (
+        ['calculator_copy_success', 'export_pdf_success', 'save_project_success'].includes(action)
+      )
+        session.calculatorSignals.add('resultUseSessions');
+    }
     if (action === 'calculator_submit_success') session.signals.add('toolSuccessSessions');
     if (['calculator_copy_success', 'export_pdf_success', 'save_project_success'].includes(action))
       session.signals.add('resultUseSessions');
@@ -64,6 +81,15 @@ export class GrowthAccumulator {
       session.signals.add('acceptedRequestSessions');
       if (event.replyPermission === 'granted') session.signals.add('replyAuthorizedSessions');
     }
+  }
+
+  calculatorObservation(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    return {
+      applicable: session?.calculatorObserved ?? false,
+      toolSuccess: session?.calculatorSignals.has('toolSuccessSessions') ?? false,
+      resultUse: session?.calculatorSignals.has('resultUseSessions') ?? false,
+    };
   }
 
   report(selected: Set<string>): GrowthGroup[] {

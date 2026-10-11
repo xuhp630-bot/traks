@@ -1,6 +1,11 @@
 import { ActionAccumulator } from './quality-actions';
 import { GrowthAccumulator } from './quality-growth';
 import { EntryFunnelAccumulator } from './quality-entry-funnels';
+import {
+  AiSourceAccumulator,
+  normalizeAiSourceObservation,
+  type AiSourceObservation,
+} from './quality-ai-sources';
 
 export type TrafficClass = 'production' | 'qa' | 'internal' | 'unknown';
 export type TrafficSelection = TrafficClass | 'all';
@@ -116,6 +121,7 @@ function failureOutcome(reason: FailureReason): FailureOutcome {
 }
 
 export interface EvidenceEvent {
+  aiSource?: AiSourceObservation;
   channelSource: string;
   channelMedium: string;
   channelCampaign: string;
@@ -239,12 +245,15 @@ function channelLabel(value: unknown, fallback: string): string {
 
 export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
   let props: Record<string, unknown> = {};
+  let malformedMetadata = false;
   try {
     const parsed: unknown = JSON.parse(String(row.event_meta || '{}'));
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
       props = parsed as Record<string, unknown>;
+    else malformedMetadata = true;
   } catch {
     props = {};
+    malformedMetadata = true;
   }
   const tracking = label(props.tracking_version);
   const release = label(props.release_version);
@@ -266,6 +275,7 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
     String(row.event_name)
   );
   return {
+    aiSource: normalizeAiSourceObservation(row, props, malformedMetadata),
     channelSource: channelLabel(row.utm_source || row.referrer_hostname, 'direct_or_unattributed'),
     channelMedium: channelLabel(row.utm_medium, 'unattributed'),
     channelCampaign: channelLabel(row.utm_campaign, 'unattributed'),
@@ -605,6 +615,7 @@ function failureSignal(
 export class QualityAccumulator {
   private actions = new ActionAccumulator();
   private growth = new GrowthAccumulator();
+  private aiSources = new AiSourceAccumulator();
   private entryFunnels = new EntryFunnelAccumulator();
   private sessions = new Map<string, SessionState>();
   private lastTimestamp = -Infinity;
@@ -668,6 +679,7 @@ export class QualityAccumulator {
       const action = event.eventName.replace(/^concrete_workflow_/, '');
       this.actions.add(event, action);
       this.growth.add(event, action);
+      this.aiSources.add(event);
       this.entryFunnels.add(event, action);
       if (action === 'diagnostic_limit_reached') session.diagnosticsLimited = true;
       const failure = failureSignal(event, action);
@@ -875,6 +887,10 @@ export class QualityAccumulator {
       classification,
       unknownClassification,
       sessions,
+      aiSources: this.aiSources.report(
+        new Set(sessions.map(session => session.sessionId)),
+        this.growth
+      ),
       acquisition: this.growth.report(new Set(sessions.map(session => session.sessionId))),
       entryFunnels: this.entryFunnels.report(new Set(sessions.map(session => session.sessionId))),
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),

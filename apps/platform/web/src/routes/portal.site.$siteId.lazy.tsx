@@ -62,6 +62,10 @@ import { GoalsDrawer } from '@/components/analytics/GoalsDrawer';
 import { EventsPathsExplorer } from '@/components/analytics/EventsPathsExplorer';
 import { QualityConsole } from '@/components/analytics/QualityConsole';
 import { BusinessPanel } from '@/components/analytics/BusinessPanel';
+import {
+  AiVisibilitySnapshots,
+  aiVisibilityQueryKey,
+} from '@/components/analytics/AiVisibilitySnapshots';
 import { FunnelFormModal } from '@/components/analytics/FunnelFormModal';
 import { FunnelsDrawer } from '@/components/analytics/FunnelsDrawer';
 import { FunnelsPanel } from '@/components/analytics/FunnelsPanel';
@@ -1093,6 +1097,7 @@ function SiteAnalyticsPage(): ReactElement {
     });
     await queryClient.invalidateQueries({ queryKey: ['site', siteId] });
     await queryClient.invalidateQueries({ queryKey: ['site-business', siteId] });
+    await queryClient.invalidateQueries({ queryKey: aiVisibilityQueryKey(siteId) });
     setTimeout(() => setRefreshing(false), 600);
   }, [queryClient, siteId, realtime.status]);
 
@@ -1870,6 +1875,7 @@ function SiteAnalyticsPage(): ReactElement {
             </>
           )}
         </div>
+        <AiVisibilitySnapshots key={siteId} siteId={siteId} isOwner={site?.role === 'owner'} />
       </div>
 
       <EditSiteModal

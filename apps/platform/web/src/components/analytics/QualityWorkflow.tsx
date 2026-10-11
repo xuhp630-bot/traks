@@ -5,7 +5,9 @@ import {
   RESOURCE_ASSET_LABELS,
   type QualityReport,
   type QualityIssueSummary,
+  type TrafficSelection,
 } from '@traks/shared';
+import { AiSourceGroups, type AiSourceWindow } from './AiSourceGroups';
 
 const OPERATION_NAMES = {
   calculate: '计算提交',
@@ -134,9 +136,13 @@ export function QualityReadingGuide(): ReactElement {
 export function QualityWorkflow({
   report,
   onExport,
+  traffic,
+  evidenceWindow,
 }: {
   report: QualityReport;
   onExport: (format: 'json' | 'markdown') => void;
+  traffic?: TrafficSelection;
+  evidenceWindow?: AiSourceWindow;
 }): ReactElement {
   const candidates = optimizationCandidates(report);
   const [operationLimit, setOperationLimit] = useState(12);
@@ -189,6 +195,11 @@ export function QualityWorkflow({
           </div>
         ))}
       </dl>
+      <AiSourceGroups
+        summary={report.aiSources}
+        traffic={traffic}
+        evidenceWindow={evidenceWindow}
+      />
       <section aria-label="渠道与联系请求">
         <h4 className="text-sm font-semibold">渠道 → 有效操作 → 联系受理与回复许可</h4>
         <p className="mt-2 text-xs leading-relaxed text-[#6E6C7C]">

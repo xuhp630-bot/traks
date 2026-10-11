@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { validate } from '../lib/validate';
 import { eq, sql, getTableColumns } from 'drizzle-orm';
@@ -11,6 +12,7 @@ import {
   createFunnelSchema,
   createSegmentSchema,
   replaceEventCatalogSchema,
+  AI_VISIBILITY_MAX_BYTES,
 } from '@traks/shared';
 import { requireAuth } from '../middleware/auth';
 import { sites, apiKeys, goals, funnels, segments, users, eventCatalogs } from '../db/schema';
@@ -24,6 +26,12 @@ import {
 } from '../lib/workspaces';
 import { roleAllows } from '../lib/permissions';
 import { fetchSiteFavicon } from '../lib/favicon';
+import {
+  AiVisibilityStoreError,
+  importAiVisibilitySnapshot,
+  readAiVisibilitySnapshot,
+  readAiVisibilitySnapshots,
+} from '../lib/ai-visibility';
 import type { Bindings, Variables } from '../types';
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
@@ -220,6 +228,99 @@ export const sitesRoute = app
 
     return c.json({ data: { ...access.site, apiKeys: keys, role: access.role } });
   })
+
+  // Official report exports are independent of anonymous collector evidence.
+  // This is authenticated manual snapshot storage, never a continuous provider API.
+  .get('/:id/ai-visibility/snapshot/:snapshotId', requireAuth, async c => {
+    c.header('Cache-Control', 'private, no-store');
+    const access = await getSiteAccess(
+      c.get('db')!,
+      c.get('userId')!,
+      c.req.param('id'),
+      c.get('tokenWorkspaceId')
+    );
+    if (!access) return c.json({ error: 'Not found' }, 404);
+    try {
+      const data = await readAiVisibilitySnapshot(
+        c.env.R2SQL_CACHE,
+        access.site,
+        c.req.param('snapshotId')
+      );
+      return c.json({ data });
+    } catch (error) {
+      if (error instanceof AiVisibilityStoreError)
+        return c.json({ error: error.message }, error.status);
+      return c.json(
+        { error: 'Exact snapshot readback failed; no partial result is available' },
+        502
+      );
+    }
+  })
+  .get('/:id/ai-visibility', requireAuth, async c => {
+    c.header('Cache-Control', 'private, no-store');
+    const access = await getSiteAccess(
+      c.get('db')!,
+      c.get('userId')!,
+      c.req.param('id'),
+      c.get('tokenWorkspaceId')
+    );
+    if (!access) return c.json({ error: 'Not found' }, 404);
+    try {
+      const data = await readAiVisibilitySnapshots(
+        c.env.R2SQL_CACHE,
+        access.site,
+        roleAllows(access.role, { site: ['configure'] }) && c.get('tokenScope') !== 'read',
+        c.req.query('cursor')
+      );
+      return c.json({ data });
+    } catch (error) {
+      if (error instanceof AiVisibilityStoreError)
+        return c.json({ error: error.message }, error.status);
+      return c.json(
+        { error: 'AI visibility storage read failed; no partial report is available' },
+        502
+      );
+    }
+  })
+  .post(
+    '/:id/ai-visibility',
+    requireAuth,
+    bodyLimit({
+      maxSize: AI_VISIBILITY_MAX_BYTES,
+      onError: c => c.json({ error: 'Snapshot JSON is too large' }, 413),
+    }),
+    async c => {
+      c.header('Cache-Control', 'private, no-store');
+      const db = c.get('db')!;
+      const userId = c.get('userId')!;
+      const siteId = c.req.param('id');
+      const manage = await checkManage(db, userId, siteId, 'configure', c.get('tokenWorkspaceId'));
+      if (!manage.ok) return c.json({ error: manage.error }, manage.status);
+      const site = await getAccessibleSite(db, userId, siteId, c.get('tokenWorkspaceId'));
+      if (!site) return c.json({ error: 'Not found' }, 404);
+      let input: unknown;
+      try {
+        input = await c.req.json();
+      } catch (error) {
+        // Streaming bodyLimit throws while JSON is read when Content-Length
+        // is absent. Preserve its size decision instead of masking it as 400.
+        if (error instanceof Error && error.name === 'BodyLimitError')
+          return c.json({ error: 'Snapshot JSON is too large' }, 413);
+        return c.json({ error: 'Expected a validated aggregate JSON snapshot' }, 400);
+      }
+      try {
+        const data = await importAiVisibilitySnapshot(c.env.R2SQL_CACHE, site, input);
+        return c.json({ data }, 201);
+      } catch (error) {
+        if (error instanceof AiVisibilityStoreError)
+          return c.json({ error: error.message }, error.status);
+        return c.json(
+          { error: 'AI visibility storage write failed; verify readback before retrying' },
+          502
+        );
+      }
+    }
+  )
 
   // Update a site (owners only)
   .patch('/:id', requireAuth, validate('json', updateSiteSchema), async c => {

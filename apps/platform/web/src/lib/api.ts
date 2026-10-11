@@ -1,6 +1,14 @@
 import { hc, type InferResponseType } from 'hono/client';
 import type { AppType } from '@traks/platform-api';
-import type { Period, EvidencePage } from '@traks/shared';
+import type {
+  Period,
+  EvidencePage,
+  AiVisibilityInput,
+  AiVisibilityReport,
+  AiVisibilityImportResult,
+  AiVisibilitySnapshotRead,
+} from '@traks/shared';
+import { aiVisibilityReportSchema, aiVisibilitySnapshotReadSchema } from '@traks/shared';
 import type {
   CompetitorReport,
   CompetitorCheck,
@@ -112,6 +120,57 @@ const competitorRoot = (scope: CompetitorScope): string =>
     : `/api/competitors/workspaces/${encodeURIComponent(scope.workspaceId)}`;
 
 export const api = {
+  async getAiVisibilitySnapshots(
+    siteId: string,
+    signal?: AbortSignal,
+    cursor?: string
+  ): Promise<{ data: AiVisibilityReport }> {
+    const query = cursor ? `?${new URLSearchParams({ cursor })}` : '';
+    const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/ai-visibility${query}`, {
+      signal,
+    });
+    await assertOk(response);
+    const result = (await response.json()) as { data?: unknown };
+    const parsed = aiVisibilityReportSchema.safeParse(result?.data);
+    if (!parsed.success || parsed.data.snapshots.some(snapshot => snapshot.siteId !== siteId))
+      throw new ApiError(
+        501,
+        'AI visibility history protocol is incompatible or outside this site'
+      );
+    return { data: parsed.data };
+  },
+  async getAiVisibilitySnapshot(
+    siteId: string,
+    snapshotId: string,
+    signal?: AbortSignal
+  ): Promise<{ data: AiVisibilitySnapshotRead }> {
+    const response = await fetch(
+      `/api/sites/${encodeURIComponent(siteId)}/ai-visibility/snapshot/${encodeURIComponent(snapshotId)}`,
+      { signal }
+    );
+    await assertOk(response);
+    const result = (await response.json()) as { data?: unknown };
+    const parsed = aiVisibilitySnapshotReadSchema.safeParse(result?.data);
+    if (
+      !parsed.success ||
+      parsed.data.snapshot.siteId !== siteId ||
+      parsed.data.snapshot.snapshotId !== snapshotId
+    )
+      throw new ApiError(501, 'AI visibility exact readback protocol or scope is incompatible');
+    return { data: parsed.data };
+  },
+  async importAiVisibilitySnapshot(
+    siteId: string,
+    input: AiVisibilityInput
+  ): Promise<{ data: AiVisibilityImportResult }> {
+    const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/ai-visibility`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    await assertOk(response);
+    return response.json();
+  },
   async getCompetitorCategories(
     workspaceId: string
   ): Promise<{ data: { categories: CompetitorCategory[]; canManage: boolean; limit: number } }> {

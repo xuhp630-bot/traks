@@ -389,6 +389,8 @@ export function QualityConsole({
             <QualityWorkflow
               key={traffic}
               report={report}
+              traffic={traffic}
+              evidenceWindow={scan.data.window}
               onExport={format => {
                 const pack = buildAnalysisPackage(report, {
                   siteId,

@@ -14,6 +14,7 @@ description: '网站分析接入、埋点审计与数据驱动优化 / website a
 - **读数/复查**：读 [真实数据与优化](references/data-review.md)，优先用现有授权API或用户导出，不重新造采集平台。
 - **Traks接入**：再读 [Traks适配注意事项](references/traks-adapter.md)。其他平台保留其原有事件、隐私与会话约定。
 - **经营看板/入口漏斗**：用 [真实数据与优化](references/data-review.md) 冻结同口径指标、入口集合和分母，不用混合流量推算转化。
+- **AI来源分组/曝光到任务完成**：再读 [同源六入口归因合同](</Users/chenhuaping/Documents/Obsidian Vault/AI 出海🚢/80-哥飞资料/wiki/skills/AI搜索曝光与来源归因全局SOP.md>) 第4–5节。保留 referrer/声明UTM 的 provenance、冲突、历史unknown和完整分页；访问不等于引用，普通Google/Bing/Apple来源不冒充AI。可引用性交现有GEO，本站测量仍由本Skill负责；全局维护不取生产数据。
 - **注册人数/业务聚合**：用 [CRM证据链](references/crm-followup.md) 核对权威账号存储和权限；不等于新增用户画像或住址采集。
 - **线索/实际跟进/收发信/留存**：读 [CRM证据链](references/crm-followup.md)，单独验收业务与匿名数据，不把元数据候选当客户回复。
 - **发布或图谱/运行时阻塞**：按需读 [运维与恢复](references/operations-recovery.md)，并遵循目标仓库的部署、代码图谱规则。

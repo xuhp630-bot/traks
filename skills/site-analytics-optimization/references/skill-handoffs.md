@@ -15,6 +15,7 @@
 | 事件计划、SDK/GA4/GTM和去重验证 | `analytics` | 业务问题到触发/属性/验证的tracking plan；复用本站适配器，不因示例默认新增GA4/GTM或更换命名 |
 | 经营看板、KPI与跨卡片数字不一致 | `metrics-dashboard` | 每指标的数据源、计数单位、分子/分母、窗口/时区、排除、null、刷新规则；布局服务业务，不照搬通用North Star卡片 |
 | 多工具口径冲突、渠道归因 | `attribution` | 业务事实来源、归因窗口、来源差异与未关联项；默认只用解读分支，不从时间接近、direct或品牌流量反推身份/真实来源 |
+| AI来源/任务完成分组，或同时请求AI搜索可引用性 | 本Skill为测量主；`agrici-seo-geo`仅负责可引用性 | 复用 [同源六入口SOP](</Users/chenhuaping/Documents/Obsidian Vault/AI 出海🚢/80-哥飞资料/wiki/skills/AI搜索曝光与来源归因全局SOP.md>) 第4–5节；引用/曝光与referrer/声明UTM/真实完成分开，QA/internal排除、历史unknown不洗白；不自动查询所有AI平台、开放训练或改WAF |
 | 分群、激活与成熟留存分析 | `cohort-analysis` | 起始/回访行为、成熟分母、保留期和置信限制；当前账号快照不是注册历史队列 |
 | 有证据的CTA、内容入口或表单转化问题 | `cro` | 假设、反证、最小修复与防误判指标；不凭低样本、零目标或通用建议宣称流失原因 |
 | 用户操作后无反馈、失败/重试不清楚 | `interaction-feedback-ux-audit` | action -> validation -> async -> result -> message -> recovery矩阵，与埋点矩阵复用同一范围；纯视觉润色不自动全审计 |

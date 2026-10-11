@@ -5,8 +5,11 @@ import {
   type QualityAccumulator,
   type TrafficSelection,
 } from './quality';
+import type { AiSourceReport } from './quality-ai-sources';
 
-export type QualityReport = ReturnType<QualityAccumulator['report']>;
+export type QualityReport = Omit<ReturnType<QualityAccumulator['report']>, 'aiSources'> & {
+  aiSources?: AiSourceReport;
+};
 export interface AnalysisScope {
   siteId: string;
   period: string;
@@ -185,6 +188,7 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
     },
     entryFunnels: report.entryFunnels,
     acquisition: report.acquisition,
+    aiSources: report.aiSources ?? null,
     growthCoverage: {
       attribution: 'first_observed_pageview_per_collector_session',
       confirmation: 'browser_observed_server_response_not_independently_verified',
@@ -261,6 +265,18 @@ export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>):
     )
   );
   blocks.push(
+    '## AI来源分组（不是引用量）',
+    ...(pack.aiSources && pack.aiSources.status !== 'unavailable'
+      ? [
+          `${pack.aiSources.denominatorSessions}个选定collector会话；来源观测状态${pack.aiSources.status}；${pack.aiSources.coverage.sourceObservationUnavailableSessions}个会话缺新版来源字段。仅来源与结果共现，不是顺序漏斗或AI推荐归因。引用数据未接通，引用次数未知（null），不是0。`,
+          ...pack.aiSources.groups.map(
+            group =>
+              `${group.provider}：${group.sessions}个会话、${group.pageviews}个原生pageview；已观测计算成功${group.toolSuccessSessions === null ? '不适用' : `${group.toolSuccessSessions}个会话`}，已观测结果使用${group.resultUseSessions === null ? '不适用' : `${group.resultUseSessions}个会话`}；已知计算器覆盖${group.goalEligibleSessions}个会话；原生来源${group.provenance.derivedFromNativeSessions}个会话、producer声明${group.provenance.producerDeclaredSessions}个会话。`
+          ),
+          `已识别来源${pack.aiSources.coverage.recognizedSessions}个会话；非AI/未归因${pack.aiSources.coverage.unclassifiedSessions}个；冲突${pack.aiSources.coverage.conflictSessions}个；缺原生pageview${pack.aiSources.coverage.missingPageviewSessions}个；畸形声明${pack.aiSources.coverage.invalidMetadataSessions}个；迟到来源变化${pack.aiSources.coverage.lateSourceChangeSessions}个；声明缺版本${pack.aiSources.coverage.unknownVersionSessions}个。诊断可能重叠，不能相加。`,
+          ...pack.aiSources.limitations.map(value => `- ${value}`),
+        ]
+      : ['当前版本未提供AI来源分组；不能将缺字段当作0或引用数据。']),
     '## 后续优化与复查',
     '- 每次只验证一个明确假设，先保存本包作为基线；不要只为了事件数字好看而改埋点。\n- QA使用独立会话并显式标记analytics_traffic=qa；验证成功、错误、业务限制、取消、重试与隐私退出。\n- 发布需另行授权，并记录真实Git/Worker与埋点标签的对应关系。\n- 上线当天先做功能QA；之后比较相同星期构成、时区、页面、语言、设备、流量及筛选的完整7天窗口；样本不足延长到14/28天并保留“无法判断”。\n- 同看操作成功、失败、取消、重试、无法关联和采集上限；前后对比不是随机实验，不宣称因果改善。\n- 涉及SEO内容/结构时另核GSC页面和查询证据，工程通过不等于搜索恢复。\n- 到复查日期后手动重新导出；本流程未创建后台监控或自动改站。'
   );
