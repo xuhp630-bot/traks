@@ -11,8 +11,9 @@ export const SNIPPET_TOKEN = '__TRAKS_SNIPPET__';
 
 /** The queue stub lets window.traks() be called before t.js executes -
  *  the tracker drains window.traks.q on load. One line, two tags. */
-export const TRACKER_STUB =
-  '<script>window.traks=window.traks||function(){(window.traks.q=window.traks.q||[]).push(arguments)}</script>';
+export const TRACKER_INIT =
+  'window.traks=window.traks||function(){(window.traks.q=window.traks.q||[]).push(arguments)};window.traks.event=window.traks.event||function(n,o){o=o||{};window.traks(n,o.props,undefined,{__traksEventOptions:true,revenue:o.revenue})}';
+export const TRACKER_STUB = `<script>${TRACKER_INIT}</script>`;
 
 export function trackerSnippet(siteKey: string, collectUrl: string): string {
   return `${TRACKER_STUB}<script defer data-site="${siteKey}" src="${collectUrl}/t.js"></script>`;
@@ -71,7 +72,7 @@ export const INSTALL_GUIDES: InstallGuide[] = [
     steps: [
       {
         title: 'Add the snippet to your <head>',
-        body: 'Paste the tracker tag into the <head> of every page you want to track. It is 1.5 KB gzipped, deferred, and cookieless.',
+        body: 'Paste the tracker tag into the <head> of every page you want to track. The tracker is deferred and cookieless, with short-lived tab session storage for channel continuity.',
         code: {
           lang: 'html',
           filename: 'index.html',
@@ -95,7 +96,7 @@ export const INSTALL_GUIDES: InstallGuide[] = [
         code: {
           lang: 'tsx',
           filename: 'app/layout.tsx',
-          code: `import Script from 'next/script';\n\nconst TRAKS_STUB =\n  'window.traks=window.traks||function(){(window.traks.q=window.traks.q||[]).push(arguments)}';\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang="en">\n      <body>\n        {children}\n        <Script id="traks-stub" strategy="beforeInteractive">{TRAKS_STUB}</Script>\n        <Script defer data-site="TRAKS_KEY" src="TRAKS_SRC" strategy="afterInteractive" />\n      </body>\n    </html>\n  );\n}`,
+          code: `import Script from 'next/script';\n\nconst TRAKS_STUB = ${JSON.stringify(TRACKER_INIT)};\n\nexport default function RootLayout({ children }: { children: React.ReactNode }) {\n  return (\n    <html lang="en">\n      <body>\n        {children}\n        <Script id="traks-stub" strategy="beforeInteractive">{TRAKS_STUB}</Script>\n        <Script defer data-site="TRAKS_KEY" src="TRAKS_SRC" strategy="afterInteractive" />\n      </body>\n    </html>\n  );\n}`,
         },
       },
       {
@@ -155,7 +156,7 @@ export const INSTALL_GUIDES: InstallGuide[] = [
         code: {
           lang: 'ts',
           filename: 'nuxt.config.ts',
-          code: `export default defineNuxtConfig({\n  app: {\n    head: {\n      script: [\n        {\n          innerHTML:\n            'window.traks=window.traks||function(){(window.traks.q=window.traks.q||[]).push(arguments)}',\n        },\n        {\n          src: 'TRAKS_SRC',\n          defer: true,\n          'data-site': 'TRAKS_KEY',\n        },\n      ],\n    },\n  },\n});`,
+          code: `export default defineNuxtConfig({\n  app: {\n    head: {\n      script: [\n        {\n          innerHTML: ${JSON.stringify(TRACKER_INIT)},\n        },\n        {\n          src: 'TRAKS_SRC',\n          defer: true,\n          'data-site': 'TRAKS_KEY',\n        },\n      ],\n    },\n  },\n});`,
         },
       },
       {
@@ -175,7 +176,7 @@ export const INSTALL_GUIDES: InstallGuide[] = [
         code: {
           lang: 'astro',
           filename: 'src/layouts/Layout.astro',
-          code: `<head>\n  ...\n  <script is:inline>window.traks=window.traks||function(){(window.traks.q=window.traks.q||[]).push(arguments)}</script>\n  <script is:inline defer data-site="TRAKS_KEY" src="TRAKS_SRC"></script>\n</head>`,
+          code: `<head>\n  ...\n  <script is:inline>${TRACKER_INIT}</script>\n  <script is:inline defer data-site="TRAKS_KEY" src="TRAKS_SRC"></script>\n</head>`,
         },
       },
       {

@@ -211,6 +211,7 @@ export interface LiveCustomEventRow {
   name: string;
   count: number;
   totalValue: number;
+  revenues?: { currency: string; amount: number }[];
 }
 
 /** Custom-event volume grouped by the page on which it fired. */
@@ -391,6 +392,12 @@ export interface LiveStoreApi {
     limit: number,
     filters?: LiveFilters
   ): Promise<LiveCustomEventRow[]>;
+  /** Declared income grouped within currency, never an account/order join. */
+  eventRevenue(
+    fromMs: number,
+    toMs: number,
+    filters?: LiveFilters
+  ): Promise<{ name: string; currency: string; count: number; totalValue: number }[]>;
   /** Custom events grouped by event name and pathname. */
   eventPages(
     fromMs: number,

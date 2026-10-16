@@ -25,6 +25,7 @@ export {
   buildRealtimeTotalQuery,
   buildBotsQuery,
   buildEventsQuery,
+  buildEventRevenueQuery,
   buildEventPagesQuery,
   buildSessionsQuery,
   buildPathFlowsQuery,

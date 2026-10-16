@@ -35,6 +35,9 @@ import {
   escapeLike,
   isPagePrefix,
   propLikePatterns,
+  eventChannelContextCtes,
+  hasChannelFilters,
+  revenueCurrencySql,
   buildEvidenceSelect,
   EVIDENCE_PAGE_SIZE,
 } from '@traks/shared';
@@ -86,7 +89,7 @@ const MEMO_QUANTUM_MS = 10_000;
 
 // Whitelist LiveDimension -> column. Values are used verbatim in SQL, so only
 // entries in this map may ever be interpolated.
-const DIMENSION_COLUMNS: Record<LiveDimension, string> = {
+const DIMENSION_COLUMNS: Partial<Record<LiveDimension, string>> = {
   pathname: 'pathname',
   referrer_hostname: 'referrer_hostname',
   country: 'country',
@@ -333,13 +336,18 @@ export class SiteLiveStore extends DurableObject<unknown> {
    * Exact-match dashboard filters as parameterized AND clauses. Columns come
    * only from the DIMENSION_COLUMNS whitelist; values are bound parameters.
    */
-  private static filterSql(filters?: LiveFilters): { sql: string; params: string[] } {
+  private static filterSql(
+    filters?: LiveFilters,
+    attributed = false
+  ): { sql: string; params: string[] } {
     if (!filters) return { sql: '', params: [] };
     let sql = '';
     const params: string[] = [];
     for (const [key, value] of Object.entries(filters)) {
-      const col = DIMENSION_COLUMNS[key as LiveDimension];
-      if (!col || typeof value !== 'string') continue;
+      const baseCol = DIMENSION_COLUMNS[key as LiveDimension];
+      if (!baseCol || typeof value !== 'string') continue;
+      const isChannel = baseCol === 'referrer_hostname' || baseCol.startsWith('utm_');
+      const col = attributed && isChannel ? `attributed_${baseCol}` : baseCol;
       // The page filter alone also understands the '/section/*' prefix syntax.
       if (col === 'pathname' && isPagePrefix(value)) {
         const prefix = value.slice(0, -2);
@@ -351,6 +359,30 @@ export class SiteLiveStore extends DurableObject<unknown> {
       params.push(value);
     }
     return { sql, params };
+  }
+
+  /** Same bounded legacy channel recovery as the historical query builders. */
+  private static eventScope(
+    fromMs: number,
+    toMs: number,
+    filters?: LiveFilters
+  ): {
+    cte: string;
+    table: string;
+    params: number[];
+    filter: { sql: string; params: string[] };
+  } {
+    if (!hasChannelFilters(filters)) {
+      return { cte: '', table: 'events', params: [], filter: SiteLiveStore.filterSql(filters) };
+    }
+    const base = `SELECT *, SUBSTR(hour_key, 1, 10) AS attribution_day FROM events
+      WHERE ts >= ? AND ts < ?`;
+    return {
+      cte: `WITH ${eventChannelContextCtes(base)}`,
+      table: 'attributed_events',
+      params: [fromMs, toMs],
+      filter: SiteLiveStore.filterSql(filters, true),
+    };
   }
 
   /** Stable memo-key fragment for a filter set. */
@@ -757,18 +789,22 @@ export class SiteLiveStore extends DurableObject<unknown> {
           .toArray();
 
         // Engaged seconds from tracker engagement pings (visit duration).
+        const engagementSource = SiteLiveStore.eventScope(prevFromMs, toMs, filters);
+        const engagementFilter = engagementSource.filter;
         const engagementRows = this.sql
           .exec(
-            `SELECT CASE WHEN ts >= ? THEN 'current' ELSE 'previous' END AS period,
+            `${engagementSource.cte}
+             SELECT CASE WHEN ts >= ? THEN 'current' ELSE 'previous' END AS period,
                     SUM(event_value) AS engaged
-             FROM events
-             WHERE event_type = 'engagement' AND ts >= ? AND ts < ?${gapSql}${f.sql}
+             FROM ${engagementSource.table}
+             WHERE event_type = 'engagement' AND ts >= ? AND ts < ?${gapSql}${engagementFilter.sql}
              GROUP BY period`,
+            ...engagementSource.params,
             curFromMs,
             prevFromMs,
             toMs,
             ...gapParams,
-            ...f.params
+            ...engagementFilter.params
           )
           .toArray();
 
@@ -1017,7 +1053,8 @@ export class SiteLiveStore extends DurableObject<unknown> {
     const special = defs.filter(
       g => (g.type === 'event' && hasProp(g)) || (g.type === 'page' && isPagePrefix(g.target))
     );
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     const defKey = defs
       .map(
         g =>
@@ -1038,12 +1075,14 @@ export class SiteLiveStore extends DurableObject<unknown> {
         const byTarget = new Map<string, { events: number; visitors: number }>();
         for (const r of this.sql
           .exec(
-            `SELECT ${col} AS target, COUNT(*) AS events,
+            `${source.cte}
+             SELECT ${col} AS target, COUNT(*) AS events,
                     COUNT(DISTINCT visitor_id) AS visitors
-             FROM events
+             FROM ${source.table}
              WHERE event_type = '${eventType}' AND ts >= ? AND ts < ?${f.sql}
                AND ${col} IN (${marks})
              GROUP BY ${col}`,
+            ...source.params,
             fromMs,
             toMs,
             ...f.params,
@@ -1062,7 +1101,7 @@ export class SiteLiveStore extends DurableObject<unknown> {
 
       for (const g of special) {
         let cond: string;
-        const params: (string | number)[] = [fromMs, toMs, ...f.params];
+        const params: (string | number)[] = [...source.params, fromMs, toMs, ...f.params];
         if (g.type === 'event') {
           const patterns = propLikePatterns(g.propKey!, g.propValue!);
           const like = patterns.map(() => `event_meta LIKE ? ESCAPE '\\'`).join(' OR ');
@@ -1075,8 +1114,9 @@ export class SiteLiveStore extends DurableObject<unknown> {
         }
         const [r] = this.sql
           .exec(
-            `SELECT COUNT(*) AS events, COUNT(DISTINCT visitor_id) AS visitors
-             FROM events
+            `${source.cte}
+             SELECT COUNT(*) AS events, COUNT(DISTINCT visitor_id) AS visitors
+             FROM ${source.table}
              WHERE ts >= ? AND ts < ?${f.sql} AND ${cond}`,
             ...params
           )
@@ -1094,19 +1134,23 @@ export class SiteLiveStore extends DurableObject<unknown> {
     filters?: LiveFilters
   ): Promise<LiveCustomEventRow[]> {
     const boundedLimit = Math.max(1, Math.min(500, limit));
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     return this.memoized(
       `customEvents:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
       MEMO_TTL_MS,
       () =>
         this.sql
           .exec(
-            `SELECT event_name AS name, COUNT(*) AS count, SUM(event_value) AS totalValue
-             FROM events
+            `${source.cte}
+             SELECT event_name AS name, COUNT(*) AS count,
+                    SUM(CASE WHEN ${revenueCurrencySql()} = '' THEN event_value ELSE 0 END) AS totalValue
+             FROM ${source.table}
              WHERE event_type = 'event' AND event_name != '' AND ts >= ? AND ts < ?${f.sql}
              GROUP BY event_name
-             ORDER BY count DESC
+             ORDER BY count DESC, event_name ASC
              LIMIT ?`,
+            ...source.params,
             fromMs,
             toMs,
             ...f.params,
@@ -1117,6 +1161,46 @@ export class SiteLiveStore extends DurableObject<unknown> {
     );
   }
 
+  /** Money remains in the original currency; no implicit exchange-rate claim. */
+  async eventRevenue(
+    fromMs: number,
+    toMs: number,
+    filters?: LiveFilters
+  ): Promise<{ name: string; currency: string; totalValue: number; count: number }[]> {
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
+    const currency = revenueCurrencySql();
+    return this.memoized(
+      `eventRevenue:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${SiteLiveStore.filterKey(filters)}`,
+      MEMO_TTL_MS,
+      () =>
+        this.sql
+          .exec(
+            `${source.cte || 'WITH'}${source.cte ? ',' : ''} revenue_events AS (
+          SELECT event_name, event_value, ${currency} AS currency
+          FROM ${source.table}
+          WHERE event_type = 'event' AND event_name != '' AND ts >= ? AND ts < ?${f.sql}
+        )
+        SELECT event_name AS name, currency, COUNT(*) AS count, SUM(event_value) AS totalValue
+        FROM revenue_events
+        WHERE currency != ''
+        GROUP BY event_name, currency
+        ORDER BY event_name ASC, currency ASC`,
+            ...source.params,
+            fromMs,
+            toMs,
+            ...f.params
+          )
+          .toArray()
+          .map(r => ({
+            name: String(r.name),
+            currency: String(r.currency),
+            totalValue: n(r.totalValue),
+            count: n(r.count),
+          }))
+    );
+  }
+
   async eventPages(
     fromMs: number,
     toMs: number,
@@ -1124,19 +1208,23 @@ export class SiteLiveStore extends DurableObject<unknown> {
     filters?: LiveFilters
   ): Promise<LiveEventPageRow[]> {
     const boundedLimit = Math.max(1, Math.min(1000, limit));
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     return this.memoized(
       `eventPages:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
       MEMO_TTL_MS,
       () =>
         this.sql
           .exec(
-            `SELECT event_name AS name, pathname, COUNT(*) AS count, SUM(event_value) AS totalValue
-             FROM events
+            `${source.cte}
+             SELECT event_name AS name, pathname, COUNT(*) AS count,
+                    SUM(CASE WHEN ${revenueCurrencySql()} = '' THEN event_value ELSE 0 END) AS totalValue
+             FROM ${source.table}
              WHERE event_type = 'event' AND event_name != '' AND pathname != '' AND ts >= ? AND ts < ?${f.sql}
              GROUP BY event_name, pathname
-             ORDER BY count DESC
+             ORDER BY count DESC, event_name ASC, pathname ASC
              LIMIT ?`,
+            ...source.params,
             fromMs,
             toMs,
             ...f.params,
@@ -1157,7 +1245,8 @@ export class SiteLiveStore extends DurableObject<unknown> {
     toMs: number,
     filters?: LiveFilters
   ): Promise<LiveWebmcpMetaRow[]> {
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     return this.memoized(
       `webmcpMeta:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${SiteLiveStore.filterKey(filters)}`,
       MEMO_TTL_MS,
@@ -1166,13 +1255,15 @@ export class SiteLiveStore extends DurableObject<unknown> {
           .exec(
             // Meta is canonicalized at ingest to '{"tool":...,"status":...}',
             // so grouping the raw string yields one row per tool+status pair.
-            `SELECT event_meta AS meta, COUNT(*) AS calls, SUM(event_value) AS totalMs
-             FROM events
+            `${source.cte}
+             SELECT event_meta AS meta, COUNT(*) AS calls, SUM(event_value) AS totalMs
+             FROM ${source.table}
              WHERE event_type = 'event' AND event_name = ? AND event_meta != ''
                AND ts >= ? AND ts < ?${f.sql}
              GROUP BY event_meta
              ORDER BY calls DESC
              LIMIT 500`,
+            ...source.params,
             AUTO_EVENTS.WEBMCP,
             fromMs,
             toMs,
@@ -1250,20 +1341,23 @@ export class SiteLiveStore extends DurableObject<unknown> {
     filters?: LiveFilters
   ): Promise<LiveMetaRow[]> {
     const boundedLimit = Math.max(1, Math.min(500, limit));
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     return this.memoized(
       `eventMeta:${SiteLiveStore.esc(eventName)}:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
       MEMO_TTL_MS,
       () =>
         this.sql
           .exec(
-            `SELECT event_meta AS meta, COUNT(*) AS events
-             FROM events
+            `${source.cte}
+             SELECT event_meta AS meta, COUNT(*) AS events
+             FROM ${source.table}
              WHERE event_type = 'event' AND event_name = ? AND event_meta != ''
                AND ts >= ? AND ts < ?${f.sql}
              GROUP BY event_meta
              ORDER BY events DESC
              LIMIT ?`,
+            ...source.params,
             eventName,
             fromMs,
             toMs,
@@ -1283,21 +1377,24 @@ export class SiteLiveStore extends DurableObject<unknown> {
     filters?: LiveFilters
   ): Promise<LiveLinkRow[]> {
     const boundedLimit = Math.max(1, Math.min(100, limit));
-    const f = SiteLiveStore.filterSql(filters);
+    const source = SiteLiveStore.eventScope(fromMs, toMs, filters);
+    const f = source.filter;
     return this.memoized(
       `linkClicks:${SiteLiveStore.esc(eventName)}:${SiteLiveStore.q(fromMs)}:${SiteLiveStore.q(toMs)}:${boundedLimit}:${SiteLiveStore.filterKey(filters)}`,
       MEMO_TTL_MS,
       () =>
         this.sql
           .exec(
-            `SELECT event_meta AS meta, COUNT(*) AS clicks,
+            `${source.cte}
+             SELECT event_meta AS meta, COUNT(*) AS clicks,
                     COUNT(DISTINCT visitor_id) AS visitors
-             FROM events
+             FROM ${source.table}
              WHERE event_type = 'event' AND event_name = ? AND event_meta != ''
                AND ts >= ? AND ts < ?${f.sql}
              GROUP BY event_meta
              ORDER BY clicks DESC
              LIMIT ?`,
+            ...source.params,
             eventName,
             fromMs,
             toMs,

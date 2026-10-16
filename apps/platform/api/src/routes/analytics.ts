@@ -17,6 +17,7 @@ import {
   type LiveFilters,
   type LiveRealtimeLocation,
   toLiveFilters,
+  mergeEventRevenue,
   FILTER_PARAM_TO_DIMENSION,
   buildQualityEvidenceQuery,
   EVIDENCE_PAGE_SIZE,
@@ -56,6 +57,7 @@ import {
   buildRealtimeQuery,
   buildBotsQuery,
   buildEventsQuery,
+  buildEventRevenueQuery,
   buildEventPagesQuery,
   buildWebmcpQuery,
   buildEngagementStatsQuery,
@@ -1860,14 +1862,18 @@ export const analyticsRoute = appWithBatch
     if (period === 'today') {
       try {
         const range = resolvePeriod('today', new Date(), site.timezone);
-        const rows = await liveStore(c, site.siteId).customEvents(
-          ms(range.from),
-          ms(range.to),
-          500,
-          filters
-        );
+        const stub = liveStore(c, site.siteId);
+        // Read counts and currency groups from the same source/window. A
+        // revenue failure must not become an empty (apparently zero) balance.
+        const [rows, revenue] = await Promise.all([
+          stub.customEvents(ms(range.from), ms(range.to), 500, filters),
+          stub.eventRevenue(ms(range.from), ms(range.to), filters),
+        ]);
         return c.json({
-          data: rows.map(r => ({ name: r.name, count: r.count, totalValue: r.totalValue })),
+          data: mergeEventRevenue(
+            rows.map(r => ({ name: r.name, count: r.count, totalValue: r.totalValue })),
+            revenue
+          ),
         });
       } catch (err) {
         logLiveFallback(err);
@@ -1878,20 +1884,30 @@ export const analyticsRoute = appWithBatch
     const ttl = freshTtlSeconds(period, range);
 
     const outcome = await runQueries(c, () =>
-      cachedR2Sql<{ name: string; count: unknown; total_value: unknown }>(
-        c,
-        ttl,
-        buildEventsQuery(site.siteId, range, filters, 500)
-      )
+      Promise.all([
+        cachedR2Sql<{ name: string; count: unknown; total_value: unknown }>(
+          c,
+          ttl,
+          buildEventsQuery(site.siteId, range, filters, 500)
+        ),
+        cachedR2Sql<{ name: string; currency: string; count: unknown; total_value: unknown }>(
+          c,
+          ttl,
+          buildEventRevenueQuery(site.siteId, range, filters, 500)
+        ),
+      ])
     );
     if (outcome instanceof Response) return outcome;
 
     return c.json({
-      data: outcome.map(r => ({
-        name: r.name,
-        count: toNumber(r.count),
-        totalValue: toNumber(r.total_value),
-      })),
+      data: mergeEventRevenue(
+        outcome[0].map(r => ({
+          name: r.name,
+          count: toNumber(r.count),
+          totalValue: toNumber(r.total_value),
+        })),
+        outcome[1]
+      ),
     });
   })
 

@@ -5,6 +5,8 @@ import {
   computeBucketKeys,
   normalizeDomain,
   AUTO_EVENTS,
+  buildAttributionMeta,
+  sanitizeTrackingContext,
   type ValidatedTrackingEvent,
 } from '@traks/shared';
 import { parsePlausible, deriveSessionId } from './lib/plausible';
@@ -286,6 +288,11 @@ function parseCoordinate(value: string | undefined, limit: number): number | nul
 }
 
 app.post('/api/event', async c => {
+  // Respect an explicit privacy preference before parsing or accessing storage.
+  if (c.req.header('sec-gpc') === '1' || /^(?:1|yes)$/i.test(c.req.header('dnt') || '')) {
+    c.header('x-plausible-dropped', '1');
+    return c.text('ignored', 202);
+  }
   const declared = Number(c.req.header('content-length') ?? '0');
   if (declared > MAX_BODY_BYTES) return c.json({ error: 'payload too large' }, 413);
   const raw = await c.req.text().catch(() => '');
@@ -311,6 +318,8 @@ app.post('/api/event', async c => {
     if (!result.success) return c.json({ error: 'invalid event' }, 400);
     event = result.data;
   }
+
+  event = sanitizeTrackingContext(event);
 
   // Bot classification first - cheap regex check before any D1 round-trip.
   // The header is capped first: it feeds the bot regexes, the UA parser, and
@@ -420,6 +429,19 @@ app.post('/api/event', async c => {
         } catch {
           // Malformed props - drop the URL, keep the event.
         }
+        try {
+          const target = new URL(url);
+          if (!/^https?:$/.test(target.protocol)) url = '';
+          else {
+            target.username = '';
+            target.password = '';
+            target.search = '';
+            target.hash = '';
+            url = target.toString().slice(0, 500);
+          }
+        } catch {
+          url = '';
+        }
         eventMeta = url ? JSON.stringify({ url }) : '';
       }
       // WebMCP tool calls: same canonicalization, exact form
@@ -437,6 +459,19 @@ app.post('/api/event', async c => {
           // panel only aggregates rows that name a tool.
         }
         eventMeta = tool ? JSON.stringify({ tool, status }) : '';
+      }
+
+      const isCanonicalAutoEvent =
+        isWebmcpCall ||
+        (event.t === 'event' &&
+          (event.en === AUTO_EVENTS.OUTBOUND || event.en === AUTO_EVENTS.DOWNLOAD));
+      if (!isCanonicalAutoEvent) {
+        eventMeta = buildAttributionMeta(eventMeta, {
+          currency: event.t === 'event' ? event.rc : undefined,
+          amount: event.ev,
+          content: event.uct,
+          term: event.ut,
+        });
       }
 
       const record = {

@@ -15,6 +15,9 @@ export interface TrackingEvent {
   us?: string; // utm_source
   um?: string; // utm_medium
   uc?: string; // utm_campaign
+  uct?: string; // utm_content (stored in metadata)
+  ut?: string; // utm_term (stored in metadata)
+  rc?: string; // declared revenue currency (stored in metadata)
   en?: string; // event_name (custom events)
   ep?: string; // event_props JSON (custom events)
   ev?: number; // event_value (custom events)
@@ -138,6 +141,8 @@ export interface CustomEventItem {
   name: string;
   count: number;
   totalValue: number;
+  /** Declared event income, grouped by currency; never an order ledger. */
+  revenues?: { currency: string; amount: number }[];
 }
 
 export interface RealtimeStats {

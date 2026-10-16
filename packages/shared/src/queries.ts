@@ -494,7 +494,7 @@ export function granularityColumn(granularity: 'hour' | 'day' | 'week'): string 
 
 // Whitelist LiveFilters key -> column. Values are escaped; only keys in this
 // map may ever reach the SQL text.
-const FILTER_COLUMNS: Record<LiveDimension, string> = {
+const FILTER_COLUMNS: Partial<Record<LiveDimension, string>> = {
   pathname: 'pathname',
   referrer_hostname: 'referrer_hostname',
   country: 'country',
@@ -508,14 +508,107 @@ const FILTER_COLUMNS: Record<LiveDimension, string> = {
   utm_campaign: 'utm_campaign',
 };
 
+const CHANNEL_COLUMNS = ['referrer_hostname', 'utm_source', 'utm_medium', 'utm_campaign'] as const;
+
+/** Only the existing session/day visitor scope may recover legacy event tags. */
+export function hasChannelFilters(filters?: LiveFilters): boolean {
+  return CHANNEL_COLUMNS.some(column => typeof filters?.[column] === 'string');
+}
+
+/** Shared by Iceberg queries and SQLite; no new identifier or stored data. */
+export function eventChannelContextCtes(baseSql: string): string {
+  const keys = ['session_id', 'visitor_id', 'attribution_day'];
+  const keyJoin = (left: string, right: string): string =>
+    keys.map(key => `${left}.${key} = ${right}.${key}`).join(' AND ');
+  const emptyTouch = CHANNEL_COLUMNS.map(column => `e.${column} = ''`).join(' AND ');
+  const recover = `e.event_type != 'pageview' AND ${emptyTouch} AND c.first_hit <= e.ts`;
+  const channelValues = CHANNEL_COLUMNS.map(column => `MIN(p.${column}) AS ${column}`).join(
+    ',\n        '
+  );
+  const uniqueFirstTouch = CHANNEL_COLUMNS.map(
+    column => `MIN(p.${column}) = MAX(p.${column})`
+  ).join(' AND ');
+  // Missing tags on later pageviews are common in the old tracker. They are
+  // not evidence of a second channel; conflicting nonempty values are.
+  const consistentTouch = CHANNEL_COLUMNS.map(
+    column => `COUNT(DISTINCT NULLIF(${column}, '')) <= 1`
+  ).join(' AND ');
+  const effectiveChannels = CHANNEL_COLUMNS.map(
+    column => `CASE WHEN ${recover} THEN c.${column} ELSE e.${column} END AS attributed_${column}`
+  ).join(',\n        ');
+  return `source_events AS (
+      ${baseSql}
+    ), first_pageviews AS (
+      SELECT session_id, visitor_id, attribution_day, MIN(ts) AS first_hit
+      FROM source_events
+      WHERE event_type = 'pageview' AND session_id != '' AND visitor_id != ''
+      GROUP BY session_id, visitor_id, attribution_day
+    ), session_channels AS (
+      SELECT p.session_id, p.visitor_id, p.attribution_day, MIN(p.ts) AS first_hit,
+        ${channelValues}
+      FROM source_events p
+      JOIN first_pageviews f ON ${keyJoin('p', 'f')} AND p.ts = f.first_hit
+      WHERE p.event_type = 'pageview'
+      GROUP BY p.session_id, p.visitor_id, p.attribution_day
+      HAVING ${uniqueFirstTouch}
+    ), consistent_sessions AS (
+      SELECT session_id, visitor_id, attribution_day
+      FROM source_events
+      WHERE event_type = 'pageview' AND session_id != '' AND visitor_id != ''
+      GROUP BY session_id, visitor_id, attribution_day
+      HAVING ${consistentTouch}
+    ), qualified_channels AS (
+      SELECT c.* FROM session_channels c
+      JOIN consistent_sessions s ON ${keyJoin('c', 's')}
+    ), attributed_events AS (
+      SELECT e.*,
+        ${effectiveChannels}
+      FROM source_events e
+      LEFT JOIN qualified_channels c ON ${keyJoin('e', 'c')}
+    )`;
+}
+
+/** Fixed first-key framing is canonicalized at ingest, not arbitrary JSON. */
+export function revenueCurrencySql(metaColumn = 'event_meta'): string {
+  const prefix = '{"__traks_currency":"';
+  const start = prefix.length + 1;
+  const letters = [0, 1, 2]
+    .map(offset => `SUBSTR(${metaColumn}, ${start + offset}, 1) BETWEEN 'A' AND 'Z'`)
+    .join(' AND ');
+  return `CASE WHEN SUBSTR(${metaColumn}, 1, ${prefix.length}) = '${prefix}'
+    AND ${letters}
+    AND SUBSTR(${metaColumn}, ${start + 3}, 2) IN ('"}', '",')
+    THEN SUBSTR(${metaColumn}, ${start}, 3) ELSE '' END`;
+}
+
+function eventSourceScope(
+  table: string,
+  siteKey: string,
+  range: { from: string; to: string },
+  filters?: LiveFilters
+): { cte: string; table: string; attributed: boolean } {
+  if (!hasChannelFilters(filters)) return { cte: '', table, attributed: false };
+  const base = `SELECT *, date_key AS attribution_day FROM ${table}
+      WHERE ${whereSiteAndRange(siteKey, range, null)}`;
+  return {
+    cte: `WITH ${eventChannelContextCtes(base)}`,
+    table: 'attributed_events',
+    attributed: true,
+  };
+}
+
 /** Exact-match dashboard filters as additional AND clauses ('' if none).
  *  The page filter alone also understands the '/section/*' prefix syntax. */
-function filterClause(filters?: LiveFilters): string {
+function filterClause(filters?: LiveFilters, attributed = false): string {
   if (!filters) return '';
   let sql = '';
   for (const [key, value] of Object.entries(filters)) {
-    const col = FILTER_COLUMNS[key as LiveDimension];
-    if (!col || typeof value !== 'string') continue;
+    const baseCol = FILTER_COLUMNS[key as LiveDimension];
+    if (!baseCol || typeof value !== 'string') continue;
+    const col =
+      attributed && CHANNEL_COLUMNS.some(channel => channel === baseCol)
+        ? `attributed_${baseCol}`
+        : baseCol;
     if (col === 'pathname' && isPagePrefix(value)) {
       sql += ` AND ${pathMatchSql(col, value)}`;
       continue;
@@ -531,7 +624,8 @@ function whereSiteAndRange(
   siteKey: string,
   range: { from: string; to: string },
   eventType: string | null = 'pageview',
-  filters?: LiveFilters
+  filters?: LiveFilters,
+  attributed = false
 ) {
   return (
     `site_id = '${esc(siteKey)}'` +
@@ -539,7 +633,7 @@ function whereSiteAndRange(
     ` AND ts >= TIMESTAMP '${esc(range.from)}'` +
     ` AND ts < TIMESTAMP '${esc(range.to)}'` +
     ingestBounds(range.from, range.to) +
-    filterClause(filters)
+    filterClause(filters, attributed)
   );
 }
 
@@ -554,10 +648,17 @@ function whereSiteAndComparison(
   siteKey: string,
   range: PeriodRange,
   eventType: string,
-  filters?: LiveFilters
+  filters?: LiveFilters,
+  attributed = false
 ): string {
   const prev = previousRange(range);
-  let sql = whereSiteAndRange(siteKey, { from: prev.from, to: range.to }, eventType, filters);
+  let sql = whereSiteAndRange(
+    siteKey,
+    { from: prev.from, to: range.to },
+    eventType,
+    filters,
+    attributed
+  );
   if (prev.to !== range.from) {
     sql += ` AND (ts < TIMESTAMP '${esc(prev.to)}' OR ts >= TIMESTAMP '${esc(range.from)}')`;
   }
@@ -627,14 +728,18 @@ export function buildEngagementStatsQuery(
   filters?: LiveFilters
 ) {
   const periodExpr = `CASE WHEN ts >= TIMESTAMP '${esc(range.from)}' THEN 'current' ELSE 'previous' END`;
-  return (table: string) => `
+  return (table: string) => {
+    const previous = previousRange(range);
+    const source = eventSourceScope(table, siteKey, { from: previous.from, to: range.to }, filters);
+    return `${source.cte}
     SELECT
       ${periodExpr} AS period,
       SUM(event_value) AS engaged
-    FROM ${table}
-    WHERE ${whereSiteAndComparison(siteKey, range, 'engagement', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndComparison(siteKey, range, 'engagement', filters, source.attributed)}
     GROUP BY ${periodExpr}
   `;
+  };
 }
 
 /** Conversion counts for event-type goals (grouped by event_name). */
@@ -645,16 +750,19 @@ export function buildGoalEventsQuery(
   filters?: LiveFilters
 ) {
   const names = eventNames.map(n => `'${esc(n)}'`).join(', ');
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_name AS target,
       COUNT(*) AS events,
       approx_distinct(visitor_id) AS visitors
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name IN (${names})
     GROUP BY event_name
   `;
+  };
 }
 
 /**
@@ -670,15 +778,18 @@ export function buildGoalEventPropQuery(
   propValue: string,
   filters?: LiveFilters
 ) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       COUNT(*) AS events,
       approx_distinct(visitor_id) AS visitors
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name = '${esc(target)}'
       AND ${propMatchSql(propKey, propValue)}
   `;
+  };
 }
 
 /** A "special" goal: prop-filtered event goal or '/section/*' page-prefix goal. */
@@ -715,13 +826,16 @@ export function buildSpecialGoalsQuery(
       `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END) AS events_${i},
       approx_distinct(CASE WHEN ${cond} THEN visitor_id END) AS visitors_${i}`
   );
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       ${cols.join(',\n      ')}
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, null, filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, null, filters, source.attributed)}
       AND (${conds.join(' OR ')})
   `;
+  };
 }
 
 /** One section-prefix page goal ('/docs/*') - LIKE can't ride the IN batch. */
@@ -766,12 +880,16 @@ export function buildGoalPagesQuery(
  *
  * Per session, take the first-occurrence time of each step (MIN over a CASE),
  * then count a session into step N only when steps 0..N all occurred and
- * their first occurrences are non-decreasing in time. This is first-touch
- * ordering - the standard funnel approximation; a session that re-enters a
- * step later doesn't change its counted position.
+ * their first occurrences are strictly increasing in time. Equal timestamps
+ * do not prove event order; overlapping/duplicate step predicates must not
+ * reuse one first occurrence as an ordered completion.
+ *
+ * This remains a first-occurrence approximation, not full path replay. A
+ * later retry does not replace an earlier MIN, so a session can remain
+ * incomplete even when it subsequently follows the intended step order.
  *
  * NULL comparisons make missing steps drop out naturally: if sN is NULL,
- * `sN >= sN-1` is NULL, the CASE falls to ELSE 0.
+ * `sN > sN-1` is NULL, the CASE falls to ELSE 0.
  */
 export function buildFunnelQuery(
   siteKey: string,
@@ -792,27 +910,30 @@ export function buildFunnelQuery(
   const chain: string[] = [];
   const counts = conds
     .map((_, i) => {
-      chain.push(i === 0 ? 's0 IS NOT NULL' : `s${i} >= s${i - 1}`);
+      chain.push(i === 0 ? 's0 IS NOT NULL' : `s${i} > s${i - 1}`);
       return `SUM(CASE WHEN ${chain.join(' AND ')} THEN 1 ELSE 0 END) AS c${i}`;
     })
     .join(',\n      ');
-  return (table: string) => `
-    WITH step_times AS (
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte || 'WITH'}${source.cte ? ',' : ''} step_times AS (
       SELECT
-        session_id,
+        session_id, visitor_id, date_key,
         ${stepCols}
-      FROM ${table}
+      FROM ${source.table}
       WHERE site_id = '${esc(siteKey)}'
         AND ts >= TIMESTAMP '${esc(range.from)}'
         AND ts < TIMESTAMP '${esc(range.to)}'${ingestBounds(range.from, range.to)}
         AND session_id != ''
-        AND (${conds.join(' OR ')})${filterClause(filters)}
-      GROUP BY session_id
+        AND visitor_id != ''
+        AND (${conds.join(' OR ')})${filterClause(filters, source.attributed)}
+      GROUP BY session_id, visitor_id, date_key
     )
     SELECT
       ${counts}
     FROM step_times
   `;
+  };
 }
 
 /**
@@ -919,19 +1040,22 @@ export function buildLinkEventsQuery(
   filters?: LiveFilters,
   limit = 10
 ) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_meta AS meta,
       COUNT(*) AS clicks,
       approx_distinct(visitor_id) AS visitors
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name = '${esc(eventName)}'
       AND event_meta != ''
     GROUP BY event_meta
     ORDER BY clicks DESC
     LIMIT ${limit}
   `;
+  };
 }
 
 export function buildTopReferrersQuery(
@@ -1220,18 +1344,21 @@ export function buildEventMetaQuery(
   filters?: LiveFilters,
   limit = 500
 ) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_meta AS meta,
       COUNT(*) AS events
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name = '${esc(eventName)}'
       AND event_meta != ''
     GROUP BY event_meta
     ORDER BY events DESC
     LIMIT ${limit}
   `;
+  };
 }
 
 /**
@@ -1277,19 +1404,22 @@ export function buildRealtimeQuery(siteKey: string, now: Date) {
  * per-tool rows with calls / errors / avg duration.
  */
 export function buildWebmcpQuery(siteKey: string, range: PeriodRange, filters?: LiveFilters) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_meta AS meta,
       COUNT(*) AS calls,
       SUM(event_value) AS total_ms
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name = '${esc(AUTO_EVENTS.WEBMCP)}'
       AND event_meta != ''
     GROUP BY event_meta
     ORDER BY calls DESC
     LIMIT 500
   `;
+  };
 }
 
 /**
@@ -1322,18 +1452,55 @@ export function buildEventsQuery(
   filters?: LiveFilters,
   limit = 20
 ) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_name AS name,
       COUNT(*) AS count,
-      SUM(event_value) AS total_value
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+      SUM(CASE WHEN ${revenueCurrencySql()} = '' THEN event_value ELSE 0 END) AS total_value
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name != ''
     GROUP BY event_name
-    ORDER BY count DESC
+    ORDER BY count DESC, event_name ASC
     LIMIT ${limit}
   `;
+  };
+}
+
+/** Top event names, then every currency for those names; never mix currencies. */
+export function buildEventRevenueQuery(
+  siteKey: string,
+  range: PeriodRange,
+  filters?: LiveFilters,
+  limit = 20
+) {
+  // Match the production event explorer's 500-name ceiling. Every selected
+  // name retains all of its currencies, including names without income.
+  const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const currency = revenueCurrencySql();
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte || 'WITH'}${source.cte ? ',' : ''} report_events AS (
+      SELECT event_name, event_value, ${currency} AS currency
+      FROM ${source.table}
+      WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
+        AND event_name != ''
+    ), report_names AS (
+      SELECT event_name FROM report_events
+      GROUP BY event_name
+      ORDER BY COUNT(*) DESC, event_name ASC
+      LIMIT ${boundedLimit}
+    )
+    SELECT event_name AS name, currency,
+      COUNT(*) AS count, SUM(event_value) AS total_value
+    FROM report_events
+    WHERE currency != '' AND event_name IN (SELECT event_name FROM report_names)
+    GROUP BY event_name, currency
+    ORDER BY event_name ASC, currency ASC
+    `;
+  };
 }
 
 /**
@@ -1346,19 +1513,22 @@ export function buildEventPagesQuery(
   filters?: LiveFilters,
   limit = 1000
 ) {
-  return (table: string) => `
+  return (table: string) => {
+    const source = eventSourceScope(table, siteKey, range, filters);
+    return `${source.cte}
     SELECT
       event_name AS name,
       pathname,
       COUNT(*) AS count,
-      SUM(event_value) AS total_value
-    FROM ${table}
-    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters)}
+      SUM(CASE WHEN ${revenueCurrencySql()} = '' THEN event_value ELSE 0 END) AS total_value
+    FROM ${source.table}
+    WHERE ${whereSiteAndRange(siteKey, range, 'event', filters, source.attributed)}
       AND event_name != ''
     GROUP BY event_name, pathname
-    ORDER BY count DESC
+    ORDER BY count DESC, event_name ASC, pathname ASC
     LIMIT ${limit}
   `;
+  };
 }
 
 /**

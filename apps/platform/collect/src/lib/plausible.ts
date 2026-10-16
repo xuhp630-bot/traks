@@ -17,6 +17,8 @@
  *   for Plausible-sourced traffic are close but not identical to Plausible's.
  */
 
+import { normalizeRevenue, sanitizeEventProps } from '@traks/shared';
+
 export interface PlausiblePayload {
   domain: string;
   /** Mapped onto the native tracker-event fields. */
@@ -29,6 +31,9 @@ export interface PlausiblePayload {
     us?: string;
     um?: string;
     uc?: string;
+    uct?: string;
+    ut?: string;
+    rc?: string;
     en?: string;
     ep?: string;
     ev?: number;
@@ -56,6 +61,8 @@ export function parsePlausible(body: unknown): PlausiblePayload | null {
   let us: string | undefined;
   let um: string | undefined;
   let uc: string | undefined;
+  let uct: string | undefined;
+  let ut: string | undefined;
   try {
     const parsed = new URL(url);
     hostname = parsed.hostname.toLowerCase();
@@ -67,6 +74,8 @@ export function parsePlausible(body: unknown): PlausiblePayload | null {
     us = parsed.searchParams.get('utm_source')?.slice(0, 256) || undefined;
     um = parsed.searchParams.get('utm_medium')?.slice(0, 256) || undefined;
     uc = parsed.searchParams.get('utm_campaign')?.slice(0, 256) || undefined;
+    uct = parsed.searchParams.get('utm_content')?.slice(0, 256) || undefined;
+    ut = parsed.searchParams.get('utm_term')?.slice(0, 256) || undefined;
   } catch {
     return null;
   }
@@ -77,26 +86,32 @@ export function parsePlausible(body: unknown): PlausiblePayload | null {
   let ep: string | undefined;
   const rawProps = b.props ?? b.p;
   if (typeof rawProps === 'object' && rawProps !== null) {
-    const json = JSON.stringify(rawProps);
+    const json = JSON.stringify(sanitizeEventProps(rawProps));
     if (json.length <= 1024 && json !== '{}') ep = json;
   } else if (typeof rawProps === 'string' && rawProps.length <= 1024 && rawProps !== '{}') {
-    ep = rawProps;
+    try {
+      const json = JSON.stringify(sanitizeEventProps(JSON.parse(rawProps)));
+      if (json !== '{}') ep = json;
+    } catch {
+      /* Invalid props do not invalidate the business event. */
+    }
   }
 
-  // Events API revenue: { currency, amount }. Amount only - single-currency
-  // sums are the site owner's concern, matching our native ev semantics.
+  // Both Events API `revenue` and tracker `$` carry { currency, amount }.
+  // Preserve the declared currency; the collector stores it in metadata so
+  // analytics never treat unlike currencies as one generic value sum.
   let ev: number | undefined;
-  const revenue = b.revenue as { amount?: unknown } | undefined;
-  if (revenue && typeof revenue === 'object') {
-    const amount = Number(revenue.amount);
-    if (Number.isFinite(amount) && amount >= 0 && amount <= 1_000_000) ev = amount;
-  }
+  const revenue = normalizeRevenue(b.revenue ?? b.$);
+  if (revenue) ev = revenue.amount;
 
   const sw = typeof b.w === 'number' && b.w > 0 && b.w <= 10000 ? Math.round(b.w) : 0;
   const r = str(b.r ?? b.referrer, 2048);
 
   if (name === 'pageview') {
-    return { domain, event: { t: 'pageview', p: pathname, h: hostname, r, sw, us, um, uc } };
+    return {
+      domain,
+      event: { t: 'pageview', p: pathname, h: hostname, r, sw, us, um, uc, uct, ut },
+    };
   }
   if (name === 'engagement') {
     // Plausible's engagement beacon carries engagement time in ms under `e`.
@@ -112,13 +127,30 @@ export function parsePlausible(body: unknown): PlausiblePayload | null {
         us,
         um,
         uc,
+        uct,
+        ut,
         ev: Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds / 1000, 86_400) : 0,
       },
     };
   }
   return {
     domain,
-    event: { t: 'event', p: pathname, h: hostname, r, sw, us, um, uc, en: name, ep, ev },
+    event: {
+      t: 'event',
+      p: pathname,
+      h: hostname,
+      r,
+      sw,
+      us,
+      um,
+      uc,
+      uct,
+      ut,
+      en: name,
+      ep,
+      ev,
+      rc: revenue?.currency,
+    },
   };
 }
 

@@ -24,6 +24,7 @@ import type {
   FunnelStat,
   SegmentDef,
   SegmentFilters,
+  CustomEventItem,
 } from '@traks/shared';
 import { INSTALL_GUIDES, findInstallGuide, guideWithSnippet, trackerSnippet } from '@traks/shared';
 import { cn, formatNumber, formatDuration, formatPercentChange } from '@/lib/utils';
@@ -57,6 +58,7 @@ import { CountryFlag, countryName } from '@/components/analytics/CountryFlag';
 import { DimensionIcon } from '@/components/analytics/DimensionIcon';
 import { PlatformSelect } from '@/components/install/PlatformSelect';
 import { GoalsPanel } from '@/components/analytics/GoalsPanel';
+import { RevenuePanel } from '@/components/analytics/RevenuePanel';
 import { GoalFormModal, type GoalDef } from '@/components/analytics/GoalFormModal';
 import { GoalsDrawer } from '@/components/analytics/GoalsDrawer';
 import { EventsPathsExplorer } from '@/components/analytics/EventsPathsExplorer';
@@ -1240,6 +1242,16 @@ function SiteAnalyticsPage(): ReactElement {
   const timeseriesQ = useQuery(
     tileOpts(['timeseries'], () => api.getTimeseries(siteId, period, filters), true, true)
   );
+  // Share the event explorer's exact query key rather than issuing a second
+  // scan. Revenue is raw/mixed telemetry, not the default business cohort.
+  // No previous-window placeholder: changing filters must not show old money.
+  const eventsQ = useQuery({
+    queryKey: ['site-analytics', siteId, 'events-page', period, filterKey],
+    queryFn: async () => api.getEvents(siteId, period, filters),
+    enabled: showRaw,
+    staleTime: period === 'today' ? 15_000 : 60_000,
+    refetchInterval: getRefetchInterval(period),
+  });
 
   // keepPreviousData means a period or filter switch leaves the previous
   // view's numbers on screen while the new ones load. A cold R2 SQL fan-out
@@ -1667,6 +1679,12 @@ function SiteAnalyticsPage(): ReactElement {
                 />
               </div>
               <EventsPathsExplorer siteId={siteId} period={period} filters={filters} />
+              <RevenuePanel
+                events={(eventsQ.data as { data?: CustomEventItem[] } | undefined)?.data}
+                isLoading={eventsQ.isLoading || eventsQ.isFetching}
+                isError={eventsQ.isError}
+                onRetry={() => void eventsQ.refetch()}
+              />
 
               {/* Pages + Sources */}
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

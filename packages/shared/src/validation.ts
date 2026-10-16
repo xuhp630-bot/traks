@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRevenue } from './attribution';
 
 /** Free-text tracker field: overlong values are trimmed, not rejected. */
 const clipped = (max: number) => z.string().transform(s => s.slice(0, max));
@@ -13,7 +14,7 @@ const clipped = (max: number) => z.string().transform(s => s.slice(0, max));
  * is still bounded before parse by the collector's body cap. The tracker
  * clips the same limits client-side; this is the backstop for other clients.
  */
-export const trackingEventSchema = z
+const nativeTrackingEventSchema = z
   .object({
     t: z.enum(['pageview', 'event', 'engagement']),
     s: z.string().min(1).max(64),
@@ -25,6 +26,12 @@ export const trackingEventSchema = z
     us: clipped(256).optional(),
     um: clipped(256).optional(),
     uc: clipped(256).optional(),
+    uct: clipped(256).optional(),
+    ut: clipped(256).optional(),
+    rc: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
     en: clipped(256).optional(),
     // Props JSON over the limit is dropped (''), not truncated - a cut JSON
     // string is unusable to the props breakdown and goal matching.
@@ -44,6 +51,13 @@ export const trackingEventSchema = z
       .optional(),
   })
   .strict();
+
+export const trackingEventSchema = z.preprocess(raw => {
+  if (!raw || typeof raw !== 'object' || !('rc' in raw)) return raw;
+  const event = raw as Record<string, unknown>;
+  const revenue = normalizeRevenue({ currency: event.rc, amount: event.ev });
+  return { ...event, rc: revenue?.currency, ...(revenue ? { ev: revenue.amount } : {}) };
+}, nativeTrackingEventSchema);
 
 export type ValidatedTrackingEvent = z.infer<typeof trackingEventSchema>;
 

@@ -1,14 +1,15 @@
 (function () {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
   // Prevent double initialization (HMR, duplicate script tags)
   const w = window as any;
   if (w.__pb) return;
-  w.__pb = true;
 
   const scriptEl = document.currentScript as HTMLScriptElement | null;
   if (!scriptEl) return;
 
   const siteKey = scriptEl.getAttribute('data-site');
   if (!siteKey) return;
+  w.__pb = true;
 
   // Opt-in script attributes:
   //   data-hash - hash-based SPA routing: '#/route' becomes part of the page
@@ -22,20 +23,121 @@
   let lastPage: string;
 
   function currentPath(): string {
-    return useHash ? location.pathname + location.hash : location.pathname;
+    const path = useHash ? location.pathname + location.hash.split('?')[0] : location.pathname;
+    return containsPrivateValue(path) ? '/[redacted]' : clip(path, 2048);
   }
 
-  // Random session ID via sessionStorage (not a fingerprint - just a random
-  // token). Storage access THROWS in partitioned iframes, Safari Lockdown
-  // Mode, and when site data is blocked - so every access is guarded and we
-  // fall back to an in-memory id. Losing session continuity is acceptable;
-  // losing every event from that visitor is not.
-  let memorySession = '';
+  function ignored(): boolean {
+    try {
+      if (navigator.doNotTrack === '1' || navigator.doNotTrack === 'yes') return true;
+    } catch {
+      /* one unavailable signal must not hide another */
+    }
+    try {
+      if (w.doNotTrack === '1' || w.doNotTrack === 'yes') return true;
+    } catch {
+      /* unavailable window privacy properties */
+    }
+    try {
+      if ((navigator as any).globalPrivacyControl === true) return true;
+    } catch {
+      /* unavailable navigator privacy properties */
+    }
+    try {
+      if (w.traks && w.traks.disabled === true) return true;
+    } catch {
+      /* unavailable API privacy properties */
+    }
+    try {
+      const store = window.localStorage;
+      if (
+        store.getItem('traks_ignore') === 'true' ||
+        store.getItem('plausible_ignore') === 'true'
+      ) {
+        return true;
+      }
+    } catch {
+      /* blocked storage must not break the host page */
+    }
+    return false;
+  }
+
+  // Apply privacy controls before reading/writing analytics session storage.
+  const initiallyIgnored = ignored();
+
+  function containsPrivateValue(value: string): boolean {
+    let decoded = value;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      /* malformed percent escapes are checked as supplied */
+    }
+    return /[^\s/@]+@[^\s/@]+\.[^\s/@]+|\bbearer\s+|[?&](?:email|token|password|user_id|order_id)=/i.test(
+      decoded
+    );
+  }
+
+  function campaignLabel(value: unknown): string {
+    if (typeof value !== 'string' || containsPrivateValue(value) || /:\/\//.test(value)) return '';
+    const label = clip(value, 256);
+    return label;
+  }
+
+  // Automatic URLs never include credentials, query strings or fragments.
+  function publicUrl(value: string): string {
+    try {
+      const url = new URL(value);
+      if (!/^https?:$/.test(url.protocol) || containsPrivateValue(url.pathname)) return '';
+      return clip(url.origin + url.pathname, 2048);
+    } catch {
+      return '';
+    }
+  }
+
+  type Attribution = {
+    r: string;
+    us: string;
+    um: string;
+    uc: string;
+    uct: string;
+    ut: string;
+  };
+  type SessionState = Attribution & { id: string; at: number };
+  const sessionKey = '_pb_s:' + siteKey;
+  const sessionTimeout = 30 * 60 * 1000;
+  let memorySession: SessionState | null = null;
+  let mayCaptureEntry = true;
+
+  function emptyAttribution(): Attribution {
+    return { r: '', us: '', um: '', uc: '', uct: '', ut: '' };
+  }
+
+  function entryAttribution(): Attribution {
+    const params = new URLSearchParams(location.search);
+    const referrer = publicUrl(document.referrer);
+    let externalReferrer = referrer;
+    try {
+      if (referrer && new URL(referrer).hostname === location.hostname) externalReferrer = '';
+    } catch {
+      externalReferrer = '';
+    }
+    return {
+      r: externalReferrer,
+      us: campaignLabel(params.get('utm_source')),
+      um: campaignLabel(params.get('utm_medium')),
+      uc: campaignLabel(params.get('utm_campaign')),
+      uct: campaignLabel(params.get('utm_content')),
+      ut: campaignLabel(params.get('utm_term')),
+    };
+  }
+
+  // A short, site-scoped random activity session, not an account identifier.
+  // First entry is locked for the session. Later URLs cannot overwrite it.
+  // An expired session in a long-open document starts without the old UTM.
   function newSessionId(): string {
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   }
-  function getSessionId(): string {
-    const key = '_pb_s';
+  function getSession(): SessionState {
     const now = Date.now();
     let store: Storage | null = null;
     try {
@@ -43,28 +145,47 @@
     } catch {
       store = null;
     }
-    if (!store) {
-      if (!memorySession) memorySession = newSessionId();
-      return memorySession;
-    }
-    try {
-      const stored = store.getItem(key);
-      if (stored) {
-        const sep = stored.lastIndexOf(':');
-        const existingId = stored.slice(0, sep);
-        const ts = parseInt(stored.slice(sep + 1));
-        if (now - ts < 30 * 60 * 1000) {
-          store.setItem(key, existingId + ':' + now);
-          return existingId;
+    if (!memorySession && store) {
+      try {
+        const stored = JSON.parse(store.getItem(sessionKey) || 'null');
+        if (
+          stored &&
+          typeof stored.id === 'string' &&
+          /^[a-z0-9]{12,64}$/.test(stored.id) &&
+          typeof stored.at === 'number' &&
+          now >= stored.at &&
+          now - stored.at < sessionTimeout
+        ) {
+          memorySession = {
+            id: stored.id,
+            at: stored.at,
+            r: publicUrl(clip(stored.r, 2048)),
+            us: campaignLabel(stored.us),
+            um: campaignLabel(stored.um),
+            uc: campaignLabel(stored.uc),
+            uct: campaignLabel(stored.uct),
+            ut: campaignLabel(stored.ut),
+          };
         }
+      } catch {
+        /* malformed/blocked storage falls back to this document's memory */
       }
-      const id = newSessionId();
-      store.setItem(key, id + ':' + now);
-      return id;
-    } catch {
-      if (!memorySession) memorySession = newSessionId();
-      return memorySession;
     }
+    if (!memorySession || now < memorySession.at || now - memorySession.at >= sessionTimeout) {
+      memorySession = {
+        id: newSessionId(),
+        at: now,
+        ...(mayCaptureEntry ? entryAttribution() : emptyAttribution()),
+      };
+    }
+    mayCaptureEntry = false;
+    memorySession.at = now;
+    try {
+      if (store) store.setItem(sessionKey, JSON.stringify(memorySession));
+    } catch {
+      /* retain the same in-memory session when writes are blocked */
+    }
+    return memorySession;
   }
 
   // Send via fetch keepalive; on failure fall back to sendBeacon (survives
@@ -77,19 +198,52 @@
   }
 
   function sendRequest(payload: Record<string, unknown>): void {
-    const body = JSON.stringify(payload);
-    fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      keepalive: true,
-      body: body,
-    }).catch(function () {
+    if (ignored()) return;
+    let body: string;
+    try {
+      body = JSON.stringify(payload);
+    } catch {
+      return;
+    }
+    function beaconFallback(): void {
+      if (ignored()) return;
       try {
         if (navigator.sendBeacon) navigator.sendBeacon(endpoint, body);
       } catch {
         /* nothing left to try */
       }
-    });
+    }
+    try {
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        keepalive: true,
+        body: body,
+      }).catch(beaconFallback);
+    } catch {
+      beaconFallback();
+    }
+  }
+
+  function sendEvent(payload: Record<string, unknown>): void {
+    if (ignored()) return;
+    try {
+      const session = getSession();
+      sendRequest({
+        ...payload,
+        s: siteKey,
+        h: location.hostname,
+        sid: session.id,
+        r: session.r,
+        us: session.us,
+        um: session.um,
+        uc: session.uc,
+        uct: session.uct,
+        ut: session.ut,
+      });
+    } catch {
+      /* analytics must never surface in the host page */
+    }
   }
 
   // ---- Engagement time ----
@@ -112,12 +266,9 @@
     engagedMs = 0;
     // Skip sub-second blips and absurd values (suspended laptops etc.)
     if (seconds < 1 || seconds > 4 * 3600) return;
-    sendRequest({
+    sendEvent({
       t: 'engagement',
-      s: siteKey,
       p: path,
-      h: location.hostname,
-      sid: getSessionId(),
       ev: seconds,
     });
   }
@@ -138,54 +289,128 @@
     // SPA navigation: credit accumulated time to the page being left.
     if (isSPANavigation && lastPage) flushEngagement(lastPage);
     lastPage = currentPath();
-    engagedStart = Date.now();
+    engagedStart = document.visibilityState === 'hidden' ? 0 : Date.now();
 
-    const params = new URLSearchParams(location.search);
-
-    sendRequest({
+    sendEvent({
       t: 'pageview',
-      s: siteKey,
-      p: clip(currentPath(), 2048),
-      h: location.hostname,
-      r: clip(document.referrer, 2048),
+      p: currentPath(),
       sw: screen.width,
-      sid: getSessionId(),
-      us: clip(params.get('utm_source'), 256),
-      um: clip(params.get('utm_medium'), 256),
-      uc: clip(params.get('utm_campaign'), 256),
     });
   }
 
-  // Custom event API: window.traks('event_name', { props }, value).
+  // Legacy API: window.traks('event_name', props, value).
+  // Explicit options API: window.traks.event(name, { props, revenue }).
+  // Do not guess an options envelope from ordinary legacy property names.
   // The install snippet ships a stub that queues calls made before this
   // script executes (window.traks.q) - capture and replay them in order,
   // so early CTA clicks and hydration-effect events are never lost.
   const pending: IArguments[] =
     typeof w.traks === 'function' && Array.isArray(w.traks.q) ? w.traks.q : [];
+  const wasDisabled = typeof w.traks === 'function' && w.traks.disabled === true;
+
+  function safeProperties(props: unknown): string {
+    if (!props || typeof props !== 'object' || Array.isArray(props)) return '';
+    const safe: Record<string, string | number | boolean> = Object.create(null);
+    try {
+      const keys = Object.keys(props);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const normalized = key
+          .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+          .replace(/[.:-]/g, '_')
+          .toLowerCase();
+        if (
+          key.length > 64 ||
+          !/^[a-zA-Z0-9_.:-]+$/.test(key) ||
+          /^__traks_/i.test(key) ||
+          /(?:^|_)(?:email|phone|password|token|authorization|cookie|secret|user_id|account_id|customer_id|order_id|payment_id|device_id|session_id|ip_address)(?:_|$)/.test(
+            normalized
+          ) ||
+          /^(?:input|message|query|search|body|text|prompt|content|__proto__|constructor|prototype)$/.test(
+            normalized
+          )
+        ) {
+          continue;
+        }
+        try {
+          const value = (props as Record<string, unknown>)[key];
+          if (typeof value === 'string') {
+            const isUrl = /^https?:\/\//i.test(value);
+            if (!isUrl && containsPrivateValue(value)) continue;
+            const cleaned = isUrl ? publicUrl(value) : clip(value, 256);
+            if (cleaned && !containsPrivateValue(cleaned)) safe[key] = cleaned;
+          } else if (typeof value === 'number' && isFinite(value)) {
+            safe[key] = value;
+          } else if (typeof value === 'boolean') {
+            safe[key] = value;
+          }
+        } catch {
+          /* an individual throwing getter does not lose the event */
+        }
+      }
+      const serialized = JSON.stringify(safe);
+      return serialized === '{}' || serialized.length > 1024 ? '' : serialized;
+    } catch {
+      return '';
+    }
+  }
+
+  type EventOptions = {
+    props?: Record<string, unknown>;
+    revenue?: { currency?: unknown; amount?: unknown };
+  };
+  type QueuedOptions = { __traksEventOptions?: boolean; revenue?: EventOptions['revenue'] };
+
   // Never throw into the customer's code: a circular props object or a bad
   // queued call must not break their click handler or router.
-  w.traks = function (name: string, props?: Record<string, unknown>, value?: number): void {
+  w.traks = function (
+    name: string,
+    props?: Record<string, unknown>,
+    value?: number,
+    options?: QueuedOptions
+  ): void {
     try {
-      let ep = '';
-      if (props && typeof props === 'object') {
-        ep = JSON.stringify(props);
-        // Over the limit: keep the event, drop the props (a truncated JSON
-        // string would be unusable anyway).
-        if (ep.length > 1024) ep = '';
+      if (ignored() || (typeof name === 'string' && containsPrivateValue(name))) return;
+      let ev = Number(value);
+      let currency = '';
+      if (options && options.__traksEventOptions === true && options.revenue) {
+        const amount = options.revenue.amount;
+        const candidate =
+          typeof options.revenue.currency === 'string'
+            ? options.revenue.currency.toUpperCase()
+            : '';
+        if (
+          typeof amount === 'number' &&
+          isFinite(amount) &&
+          amount >= 0 &&
+          amount <= 1000000 &&
+          /^[A-Z]{3}$/.test(candidate)
+        ) {
+          ev = amount;
+          currency = candidate;
+        }
       }
-      const ev = Number(value);
-      sendRequest({
+      sendEvent({
         t: 'event',
-        s: siteKey,
-        p: clip(currentPath(), 2048),
-        h: location.hostname,
-        sid: getSessionId(),
+        p: currentPath(),
         en: clip(name, 256),
-        ep: ep,
-        ev: isFinite(ev) && ev > 0 ? Math.min(ev, 1000000) : 0,
+        ep: safeProperties(props),
+        ev: isFinite(ev) && ev >= 0 ? Math.min(ev, 1000000) : 0,
+        ...(currency ? { rc: currency } : {}),
       });
     } catch {
       /* swallow - analytics must never surface in the host page */
+    }
+  };
+  w.traks.disabled = wasDisabled;
+  w.traks.event = function (name: string, options?: EventOptions): void {
+    try {
+      w.traks(name, options && options.props, undefined, {
+        __traksEventOptions: true,
+        revenue: options && options.revenue,
+      });
+    } catch {
+      /* malformed options must not interfere with a business handler */
     }
   };
   for (let q = 0; q < pending.length; q++) {
@@ -219,14 +444,11 @@
     } else {
       return;
     }
-    sendRequest({
+    sendEvent({
       t: 'event',
-      s: siteKey,
       p: currentPath(),
-      h: location.hostname,
-      sid: getSessionId(),
       en: name,
-      ep: JSON.stringify({ url: link.href.slice(0, 500) }),
+      ep: JSON.stringify({ url: publicUrl(link.href).slice(0, 500) }),
       ev: 0,
     });
   }
@@ -242,14 +464,11 @@
   // registry lives on document.modelContext; older drafts used
   // navigator.modelContext, so both are probed. No-ops everywhere else.
   function reportToolCall(tool: string, status: string, started: number): void {
-    sendRequest({
+    sendEvent({
       t: 'event',
-      s: siteKey,
-      p: clip(currentPath(), 2048),
-      h: location.hostname,
-      sid: getSessionId(),
+      p: currentPath(),
       en: 'WebMCP: Tool Call',
-      ep: JSON.stringify({ tool: tool, status: status }),
+      ep: safeProperties({ tool: tool, status: status }),
       ev: Math.min(Date.now() - started, 1000000),
     });
   }
@@ -267,55 +486,72 @@
         reportToolCall(toolName, 'error', started);
         throw err;
       }
-      // Async execute: report when it settles; sync results report now.
-      if (result && typeof result.then === 'function') {
-        result.then(
-          function () {
-            reportToolCall(toolName, 'ok', started);
-          },
-          function () {
-            reportToolCall(toolName, 'error', started);
-          }
-        );
-      } else {
-        reportToolCall(toolName, 'ok', started);
+      try {
+        // Observing a promise/thenable must not change its return value.
+        if (result && typeof result.then === 'function') {
+          result.then(
+            function () {
+              reportToolCall(toolName, 'ok', started);
+            },
+            function () {
+              reportToolCall(toolName, 'error', started);
+            }
+          );
+        } else {
+          reportToolCall(toolName, 'ok', started);
+        }
+      } catch {
+        /* a throwing then getter is not a failure of the page's tool */
       }
       return result;
     };
   }
 
-  function instrumentModelContext(): void {
+  let modelContext: any;
+  try {
+    modelContext = (document as any).modelContext;
+  } catch {
+    /* optional API can have an unavailable/throwing getter */
+  }
+  if (!modelContext) {
     try {
-      const modelContext = (document as any).modelContext || (navigator as any).modelContext;
-      if (modelContext && typeof modelContext.registerTool === 'function') {
-        const originalRegisterTool = modelContext.registerTool;
-        modelContext.registerTool = function (tool: any, ...rest: unknown[]) {
-          try {
-            wrapTool(tool);
-          } catch {
-            /* never interfere with the page's tool registration */
-          }
-          return originalRegisterTool.call(this, tool, ...rest);
-        };
-      }
-      if (modelContext && typeof modelContext.provideContext === 'function') {
-        const originalProvideContext = modelContext.provideContext;
-        modelContext.provideContext = function (context: any, ...rest: unknown[]) {
-          try {
-            if (context && Array.isArray(context.tools)) {
-              for (let i = 0; i < context.tools.length; i++) wrapTool(context.tools[i]);
-            }
-          } catch {
-            /* never interfere with the page's tool registration */
-          }
-          return originalProvideContext.call(this, context, ...rest);
-        };
-      }
+      modelContext = (navigator as any).modelContext;
     } catch {
-      return;
+      /* optional API */
     }
   }
-  instrumentModelContext();
+  try {
+    if (modelContext && typeof modelContext.registerTool === 'function') {
+      const originalRegisterTool = modelContext.registerTool;
+      modelContext.registerTool = function (tool: any, ...rest: unknown[]) {
+        try {
+          wrapTool(tool);
+        } catch {
+          /* never interfere with the page's tool registration */
+        }
+        return originalRegisterTool.call(this, tool, ...rest);
+      };
+    }
+  } catch {
+    /* frozen/throwing optional APIs must not stop native tracking */
+  }
+  try {
+    if (modelContext && typeof modelContext.provideContext === 'function') {
+      const originalProvideContext = modelContext.provideContext;
+      modelContext.provideContext = function (context: any, ...rest: unknown[]) {
+        try {
+          if (context && Array.isArray(context.tools)) {
+            for (let i = 0; i < context.tools.length; i++) wrapTool(context.tools[i]);
+          }
+        } catch {
+          /* never interfere with the page's tool registration */
+        }
+        return originalProvideContext.call(this, context, ...rest);
+      };
+    }
+  } catch {
+    /* frozen/throwing optional APIs must not stop native tracking */
+  }
 
   if (useHash) {
     window.addEventListener('hashchange', function () {
@@ -325,12 +561,9 @@
 
   // 404 template: report the broken path once per load, alongside the pageview.
   if (is404Page) {
-    sendRequest({
+    sendEvent({
       t: 'event',
-      s: siteKey,
       p: currentPath(),
-      h: location.hostname,
-      sid: getSessionId(),
       en: '404',
       ep: JSON.stringify({ path: currentPath().slice(0, 500) }),
       ev: 0,
@@ -368,7 +601,7 @@
       },
       { once: true }
     );
-  } else {
+  } else if (!initiallyIgnored) {
     page();
   }
 
