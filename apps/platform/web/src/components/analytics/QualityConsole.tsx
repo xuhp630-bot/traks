@@ -21,6 +21,7 @@ import {
 } from '@traks/shared';
 import { api, type AnalyticsFilters } from '@/lib/api';
 import { QualityReadingGuide, QualityWorkflow, QualitySignalSummary } from './QualityWorkflow';
+import { ResourceDiagnosticDetails } from './ResourceDiagnosticDetails';
 
 const CONTROL =
   'min-h-11 rounded-xl border border-[#E6E4DE] bg-white px-3 py-2 text-sm text-[#3D3B4F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#467B64] disabled:cursor-not-allowed disabled:opacity-50';
@@ -116,6 +117,7 @@ function IssueCard({
               供应商：{RESOURCE_PROVIDER_LABELS[issue.resourceProvider ?? 'unknown']} · 网络观测：
               {RESOURCE_NETWORK_LABELS[issue.networkState ?? 'unknown']}
             </p>
+            <ResourceDiagnosticDetails diagnostic={issue.resourceDiagnostic} />
           </>
         )}
         <p className="mt-2">原因线索（非根因结论）：{diagnosis.evidence}</p>

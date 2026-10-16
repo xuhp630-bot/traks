@@ -6,6 +6,7 @@ import {
   type TrafficSelection,
 } from './quality';
 import type { AiSourceReport } from './quality-ai-sources';
+import { resourceDiagnosticLines, sanitizeResourceDiagnostic } from './resource-diagnostic';
 
 export type QualityReport = Omit<ReturnType<QualityAccumulator['report']>, 'aiSources'> & {
   aiSources?: AiSourceReport;
@@ -51,6 +52,9 @@ export function optimizationCandidates(report: QualityReport): OptimizationCandi
         `${issue.locale} / ${issue.browser} / ${issue.kind} / ${issue.reason}` +
         (issue.kind === 'resource_load_error'
           ? ` / ${issue.resourceOriginKind ?? 'unknown'} / ${issue.resourceAssetKind ?? 'unknown'} / ${issue.resourceProvider ?? 'unknown'} / ${issue.networkState ?? 'unknown'}`
+          : '') +
+        (issue.resourceDiagnostic
+          ? ` / ${issue.resourceDiagnostic.key} / ${issue.resourceDiagnostic.slot}`
           : ''),
       observed: `${issue.sessions}个collector会话有${issue.events}个信号（非已核实受影响人数）。${diagnosis.evidence}`,
       hypothesis: '原因分类是线索，不是根因；请补复现步骤、反证和具体修改假设。',
@@ -156,6 +160,7 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
       'issueSummary在最终选定会话内去重，事件保留分组multiplicity；结果、原因未知和资源来源未知是不同维度，各子组会话可重叠。',
       '资源来源/用途只来自白名单分类，历史字段缺失保持unknown；首方信号不证明主流程不可用，第三方信号不证明拦截原因。',
       '资源供应商与网络状态只接受固定分类，历史缺字段保持unknown；在线不证明资源可达，离线观测与供应商分类不是根因结论。',
+      '原生图片诊断仅识别首方IMG的rd1白名单字段；状态与布局是快照，Resource Timing同URL候选不是本次失败IMG请求的已验证HTTP状态或根因，200不能抹掉加载错误。旧数据诊断不可用，不补0或追溯猜测。',
       '关联采用同一会话、页面访问、版本、语言、设备、计算器/操作以及严格递增的接收时间；缺标识、相同时间戳、重复/并发不强行关联。',
       '后续成功只是操作级恢复信号，不证明相同输入、相同付款或网站改动导致改善；checkout_success不是支付成功。',
       '未见返回、窗口外、取消、上报缺失和未标记历史不等于真实流失；小样本不足以做因果结论。',
@@ -256,6 +261,17 @@ export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>):
     );
   if (!pack.candidates.length)
     blocks.push('当前没有可生成的候选，可能是样本/覆盖不足；不等于网站没有问题。');
+  for (const issue of pack.issues) {
+    if (issue.kind !== 'resource_load_error' || issue.resourceKind !== 'img') continue;
+    const resourceDiagnostic = sanitizeResourceDiagnostic(issue.resourceDiagnostic);
+    blocks.push(
+      `## 原生图片诊断（脱敏） · ${issue.path} · ${issue.version} · ${issue.browser}`,
+      ...resourceDiagnosticLines(resourceDiagnostic),
+      ...(resourceDiagnostic
+        ? [`\`\`\`json\n${JSON.stringify({ resourceDiagnostic }, null, 2)}\n\`\`\``]
+        : [])
+    );
+  }
   blocks.push(
     '## 渠道与联系请求（会话去重）',
     '首次已观测原生pageview归因，不是完整多触点归因；受理是浏览器观测的服务端邮件受理响应，不证明送达、合格线索或成交。回复许可仅限本次请求；CRM、实际跟进、客户回复和长期留存未接通。',

@@ -96,7 +96,7 @@ export function QualitySignalSummary({ summary }: { summary?: QualityIssueSummar
           </dl>
         </details>
         <p className="mt-3 text-[11px] leading-relaxed text-[#6E6C7C]">
-          历史缺字段保持unknown；首方信号不证明主流程不可用，第三方信号不证明被拦截。不采集资源URL或HTTP状态。
+          历史缺字段保持unknown；首方信号不证明主流程不可用，第三方信号不证明被拦截。不采集资源URL；同URL时序线索不是失败请求的已验证HTTP状态。
         </p>
       </div>
     </section>

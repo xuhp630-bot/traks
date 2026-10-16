@@ -2,6 +2,12 @@ import { ActionAccumulator } from './quality-actions';
 import { GrowthAccumulator } from './quality-growth';
 import { EntryFunnelAccumulator } from './quality-entry-funnels';
 import {
+  decodeResourceDiagnostic,
+  resourceDiagnosticLines,
+  sanitizeResourceDiagnostic,
+  type ResourceDiagnostic,
+} from './resource-diagnostic';
+import {
   AiSourceAccumulator,
   normalizeAiSourceObservation,
   type AiSourceObservation,
@@ -153,6 +159,7 @@ export interface EvidenceEvent {
   resourceAssetKind?: ResourceAssetKind;
   resourceProvider?: ResourceProvider;
   networkState?: ResourceNetworkState;
+  resourceDiagnostic?: ResourceDiagnostic;
   quoteHandoff: boolean;
 }
 
@@ -274,6 +281,13 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
   const resourceSignal = ['resource_load_error', 'concrete_workflow_resource_load_error'].includes(
     String(row.event_name)
   );
+  const resourceDiagnostic =
+    resourceSignal &&
+    row.event_type !== 'pageview' &&
+    props.resource_kind === 'img' &&
+    props.resource_origin_kind === 'first_party'
+      ? decodeResourceDiagnostic(props.resource_diagnostic)
+      : undefined;
   return {
     aiSource: normalizeAiSourceObservation(row, props, malformedMetadata),
     channelSource: channelLabel(row.utm_source || row.referrer_hostname, 'direct_or_unattributed'),
@@ -407,6 +421,7 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
       Object.hasOwn(RESOURCE_NETWORK_LABELS, props.network_state)
         ? (props.network_state as ResourceNetworkState)
         : 'unknown',
+    ...(resourceDiagnostic ? { resourceDiagnostic } : {}),
     quoteHandoff:
       row.event_name === 'concrete_workflow_result_cta_click' &&
       ['/concrete-quote-reviewer', '/concrete-contractor-bid-comparison'].includes(
@@ -460,6 +475,7 @@ export interface QualityIssue {
   resourceAssetKind?: ResourceAssetKind;
   resourceProvider?: ResourceProvider;
   networkState?: ResourceNetworkState;
+  resourceDiagnostic?: ResourceDiagnostic;
   events: number;
   sessions: number;
   firstAt: number;
@@ -746,6 +762,13 @@ export class QualityAccumulator {
             : 'unknown';
         const networkState =
           failure.kind === 'resource_load_error' ? (event.networkState ?? 'unknown') : 'unknown';
+        const resourceDiagnostic =
+          failure.kind === 'resource_load_error' &&
+          event.eventType === 'event' &&
+          event.resourceKind === 'img' &&
+          resourceOriginKind === 'first_party'
+            ? sanitizeResourceDiagnostic(event.resourceDiagnostic)
+            : undefined;
         const key = JSON.stringify([
           event.path,
           event.version,
@@ -763,6 +786,7 @@ export class QualityAccumulator {
           ...(resourceProvider !== 'unknown' || networkState !== 'unknown'
             ? ['resource_context_v1', resourceProvider, networkState]
             : []),
+          ...(resourceDiagnostic ? ['resource_diagnostic_v1', resourceDiagnostic] : []),
         ]);
         const issue = state.issues.get(key) ?? {
           key,
@@ -779,6 +803,7 @@ export class QualityAccumulator {
           resourceAssetKind,
           resourceProvider,
           networkState,
+          ...(resourceDiagnostic ? { resourceDiagnostic } : {}),
           events: 0,
           sessions: 1,
           firstAt: event.ts,
@@ -979,7 +1004,7 @@ export function issueDiagnosis(issue: QualityIssue): { evidence: string; nextChe
     const provider = issue.resourceProvider ?? 'unknown';
     const network = issue.networkState ?? 'unknown';
     return {
-      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；供应商：${RESOURCE_PROVIDER_LABELS[provider]}；网络观测：${RESOURCE_NETWORK_LABELS[network]}。未记录资源URL、HTTP状态或根因；历史缺字段保持未知。`,
+      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；供应商：${RESOURCE_PROVIDER_LABELS[provider]}；网络观测：${RESOURCE_NETWORK_LABELS[network]}。${issue.resourceDiagnostic ? `未记录资源URL；未确认本次失败请求的HTTP状态或根因。${resourceDiagnosticLines(issue.resourceDiagnostic).join(' ')}` : '未记录资源URL、HTTP状态或根因；历史缺字段保持未知。'}`,
       nextCheck:
         origin === 'first_party'
           ? '在相同版本核对首方资源响应、缓存与浏览器控制台；应用资源分类不证明页面已不可用，须复现实际操作影响。'
@@ -1014,12 +1039,18 @@ export function issueMarkdown(
   reviewedAt?: number
 ): string {
   const diagnosis = issueDiagnosis(issue);
+  const resourceDiagnostic = sanitizeResourceDiagnostic(issue.resourceDiagnostic);
+  const diagnosticBlock =
+    issue.kind === 'resource_load_error' && issue.resourceKind === 'img'
+      ? `## 原生图片诊断（脱敏）\n${resourceDiagnosticLines(resourceDiagnostic).join('\n\n')}\n\n${resourceDiagnostic ? `\`\`\`json\n${JSON.stringify({ resourceDiagnostic }, null, 2)}\n\`\`\`\n\n` : ''}`
+      : '';
   return (
     `# 需求候选：${issue.kind} · ${issue.path}\n\n` +
     `- 状态：${review}（本机人工复核；非自动故障判定）\n- 复核时间：${reviewedAt ? new Date(reviewedAt).toISOString() : '未复核'}\n` +
     `- 流量范围：${traffic}\n- 版本：${issue.version}\n- 语言 / 浏览器：${issue.locale} / ${issue.browser}\n` +
     `- 结果分类：${issue.outcome}；原因分类：${issue.reason}；表单：${issue.formKind}\n` +
     `- 有信号的collector会话：${issue.sessions}；事件信号：${issue.events}（不是已核实受影响人数）\n- 首次：${new Date(issue.firstAt).toISOString()}\n- 末次：${new Date(issue.lastAt).toISOString()}\n\n` +
+    diagnosticBlock +
     `## 原因线索（非根因结论）\n${diagnosis.evidence}\n\n## 建议核查\n${diagnosis.nextCheck}\n\n` +
     `## 待补复现\n1. 在对应版本与浏览器打开 ${issue.path}。\n2. 人工补充不含用户原文的操作步骤。\n3. 记录预期与实际结果；历史事件不证明当前仍有故障。\n\n` +
     `## 验收标准\n- 满足业务前提时原操作可完成；预期校验/权限/取消须有正确提示和恢复路径。\n- 成功与失败分别验证，重试成功不能抹掉先前的失败信号。\n- 新错误与旧版本信号分开；新事件晚于复核时间则重新核查。\n- 不采集输入原文、凭据或可识别个人信息。\n\n证据仅含脱敏聚合，不含会话原始标识；信号次数不等于独立故障次数。\n`
