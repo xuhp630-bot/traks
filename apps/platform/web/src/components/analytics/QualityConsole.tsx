@@ -117,7 +117,11 @@ function IssueCard({
               供应商：{RESOURCE_PROVIDER_LABELS[issue.resourceProvider ?? 'unknown']} · 网络观测：
               {RESOURCE_NETWORK_LABELS[issue.networkState ?? 'unknown']}
             </p>
-            <ResourceDiagnosticDetails diagnostic={issue.resourceDiagnostic} />
+            <ResourceDiagnosticDetails
+              diagnostic={issue.resourceDiagnostic}
+              signal={issue.resourceSignal}
+              resourceKind={issue.resourceKind}
+            />
           </>
         )}
         <p className="mt-2">原因线索（非根因结论）：{diagnosis.evidence}</p>

@@ -7,6 +7,11 @@ import {
 } from './quality';
 import type { AiSourceReport } from './quality-ai-sources';
 import { resourceDiagnosticLines, sanitizeResourceDiagnostic } from './resource-diagnostic';
+import {
+  resourceSignalLines,
+  sanitizeResourceSignal,
+  type ResourceSignal,
+} from './resource-signal';
 
 export type QualityReport = Omit<ReturnType<QualityAccumulator['report']>, 'aiSources'> & {
   aiSources?: AiSourceReport;
@@ -23,6 +28,7 @@ export interface AnalysisScope {
   cohortFilterKeys: string[];
 }
 export interface OptimizationCandidate {
+  resourceSignal?: ResourceSignal;
   category: string;
   path: string;
   version: string;
@@ -37,6 +43,11 @@ export interface OptimizationCandidate {
 export function optimizationCandidates(report: QualityReport): OptimizationCandidate[] {
   const candidates: OptimizationCandidate[] = report.issues.map(issue => {
     const diagnosis = issueDiagnosis(issue);
+    const resourceSignal =
+      issue.kind === 'resource_load_error' &&
+      (issue.resourceKind === 'img' || issue.resourceKind === 'script')
+        ? sanitizeResourceSignal(issue.resourceSignal)
+        : undefined;
     return {
       category:
         issue.outcome === 'blocked'
@@ -55,6 +66,9 @@ export function optimizationCandidates(report: QualityReport): OptimizationCandi
           : '') +
         (issue.resourceDiagnostic
           ? ` / ${issue.resourceDiagnostic.key} / ${issue.resourceDiagnostic.slot}`
+          : '') +
+        (resourceSignal
+          ? ` / rs1 / ${resourceSignal.trust} / ${resourceSignal.documentPhase} / ${resourceSignal.bucket}`
           : ''),
       observed: `${issue.sessions}个collector会话有${issue.events}个信号（非已核实受影响人数）。${diagnosis.evidence}`,
       hypothesis: '原因分类是线索，不是根因；请补复现步骤、反证和具体修改假设。',
@@ -63,6 +77,7 @@ export function optimizationCandidates(report: QualityReport): OptimizationCandi
         '使用QA会话复现原路径；验证成功、失败、业务限制、取消及重试。不能通过绕过权限或删除埋点来“消除错误”。',
       metric:
         '相同页面/版本/语言/设备范围内有信号的collector会话；另看操作尝试、关联成功、重试后成功和无法关联的信号。',
+      ...(resourceSignal ? { resourceSignal } : {}),
     };
   });
   for (const operation of report.operations) {
@@ -210,7 +225,14 @@ export function buildAnalysisPackage(report: QualityReport, scope: AnalysisScope
     operations: report.operations,
     behaviors: report.behaviors,
     issueSummary: report.issueSummary,
-    issues: report.issues.map(({ key: _key, ...issue }) => issue),
+    issues: report.issues.map(({ key: _key, resourceSignal: rawSignal, ...issue }) => {
+      const resourceSignal =
+        issue.kind === 'resource_load_error' &&
+        (issue.resourceKind === 'img' || issue.resourceKind === 'script')
+          ? sanitizeResourceSignal(rawSignal)
+          : undefined;
+      return { ...issue, ...(resourceSignal ? { resourceSignal } : {}) };
+    }),
     candidates: optimizationCandidates(report),
   };
 }
@@ -262,15 +284,27 @@ export function analysisMarkdown(pack: ReturnType<typeof buildAnalysisPackage>):
   if (!pack.candidates.length)
     blocks.push('当前没有可生成的候选，可能是样本/覆盖不足；不等于网站没有问题。');
   for (const issue of pack.issues) {
-    if (issue.kind !== 'resource_load_error' || issue.resourceKind !== 'img') continue;
-    const resourceDiagnostic = sanitizeResourceDiagnostic(issue.resourceDiagnostic);
-    blocks.push(
-      `## 原生图片诊断（脱敏） · ${issue.path} · ${issue.version} · ${issue.browser}`,
-      ...resourceDiagnosticLines(resourceDiagnostic),
-      ...(resourceDiagnostic
-        ? [`\`\`\`json\n${JSON.stringify({ resourceDiagnostic }, null, 2)}\n\`\`\``]
-        : [])
-    );
+    if (issue.kind !== 'resource_load_error') continue;
+    if (issue.resourceKind === 'img') {
+      const resourceDiagnostic = sanitizeResourceDiagnostic(issue.resourceDiagnostic);
+      blocks.push(
+        `## 原生图片诊断（脱敏） · ${issue.path} · ${issue.version} · ${issue.browser}`,
+        ...resourceDiagnosticLines(resourceDiagnostic),
+        ...(resourceDiagnostic
+          ? [`\`\`\`json\n${JSON.stringify({ resourceDiagnostic }, null, 2)}\n\`\`\``]
+          : [])
+      );
+    }
+    const resourceSignal =
+      issue.resourceKind === 'img' || issue.resourceKind === 'script'
+        ? sanitizeResourceSignal(issue.resourceSignal)
+        : undefined;
+    if (resourceSignal)
+      blocks.push(
+        `## 资源事件信号（脱敏） · ${issue.path} · ${issue.version} · ${issue.browser}`,
+        ...resourceSignalLines(resourceSignal),
+        `\`\`\`json\n${JSON.stringify({ resourceSignal }, null, 2)}\n\`\`\``
+      );
   }
   blocks.push(
     '## 渠道与联系请求（会话去重）',

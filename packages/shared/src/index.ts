@@ -8,6 +8,7 @@ export * from './ai-visibility';
 export * from './install-guides';
 export * from './quality';
 export * from './resource-diagnostic';
+export * from './resource-signal';
 export * from './quality-actions';
 export * from './quality-brief';
 export * from './quality-growth';

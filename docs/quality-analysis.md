@@ -325,3 +325,36 @@ call reporting. Frozen tool definitions remain usable without being instrumented
 Verify the generated inline `/t.js` copy as well as the TypeScript source.
 This fixes an evidenced browser compatibility issue; it does not retrospectively
 explain or relabel all historical unknown traffic.
+
+## Additive resource event signal (`rs1`)
+
+The optional `resource_signal` metadata value is exactly four finite tokens,
+at most128 characters: `rs1|trust|document_phase|bucket`.
+
+- Trust: `trusted`, `untrusted`, `unknown`; a client-reported `event.isTrusted`
+  flag, not independently verified human activity or a native request proof.
+- Observation phase: `loading`, `interactive`, `complete`, `unknown`; the
+  document phase when the error was observed, not the request's start/failure time.
+- Bucket: `known_img`, `clarity_tag`, `clarity_runtime`, `other`, `unknown`;
+  client-local classification only. No resource URL, host, path, ID, query,
+  timestamp, error message or stack enters this field.
+
+Only raw `event_type=event` with normalized name
+`concrete_workflow_resource_load_error` and `resource_kind=img|script` receives
+the additive API `resourceSignal` object. Its only four own data fields are
+`version`, `trust`, `documentPhase`, `bucket`. Third-party scripts are eligible;
+they do not become first-party/native-image diagnostics. Decoders reject
+wrong versions/tokens/enums and overlong input. API/aggregate/export/renderer
+boundaries revalidate finite own fields, never getters, inherited data or
+arbitrary object metadata.
+
+Valid rs1 appends a separate issue signature. Missing/malformed/foreign metadata
+is omitted and retains legacy grouping keys. Group splits are not new incident
+counts: event multiplicity, deduplicated sessions, outcomes and unknown HTTP
+status keep their existing meaning. The old `rd1` parser/wire remains independent
+and unchanged; history is not backfilled. JSON, candidates, issue/full Markdown
+and both issue-card surfaces preserve the same safe fields and qualified labels.
+Neither `trusted` nor a document phase/resource bucket suppresses a failure or
+identifies its physical cause. This additive consumer change requires no new
+database, collector schema or migration. Local tests are not production
+collector reception, browser QA or a release authorization.

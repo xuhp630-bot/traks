@@ -8,6 +8,12 @@ import {
   type ResourceDiagnostic,
 } from './resource-diagnostic';
 import {
+  decodeResourceSignal,
+  resourceSignalLines,
+  sanitizeResourceSignal,
+  type ResourceSignal,
+} from './resource-signal';
+import {
   AiSourceAccumulator,
   normalizeAiSourceObservation,
   type AiSourceObservation,
@@ -160,6 +166,7 @@ export interface EvidenceEvent {
   resourceProvider?: ResourceProvider;
   networkState?: ResourceNetworkState;
   resourceDiagnostic?: ResourceDiagnostic;
+  resourceSignal?: ResourceSignal;
   quoteHandoff: boolean;
 }
 
@@ -278,15 +285,26 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
   const reason = FAILURE_REASONS.includes(props.failure_reason as FailureReason)
     ? (props.failure_reason as FailureReason)
     : 'unknown';
-  const resourceSignal = ['resource_load_error', 'concrete_workflow_resource_load_error'].includes(
-    String(row.event_name)
-  );
+  const isResourceLoadError = [
+    'resource_load_error',
+    'concrete_workflow_resource_load_error',
+  ].includes(String(row.event_name));
   const resourceDiagnostic =
-    resourceSignal &&
+    isResourceLoadError &&
     row.event_type !== 'pageview' &&
     props.resource_kind === 'img' &&
     props.resource_origin_kind === 'first_party'
       ? decodeResourceDiagnostic(props.resource_diagnostic)
+      : undefined;
+  const eventName =
+    row.event_name === '404' ? '404' : label(row.event_name, 'unrecognized_event', 240);
+  const eventType = row.event_type === 'pageview' ? 'pageview' : 'event';
+  const resourceSignal =
+    eventName === 'concrete_workflow_resource_load_error' &&
+    row.event_type === 'event' &&
+    eventType === 'event' &&
+    (props.resource_kind === 'img' || props.resource_kind === 'script')
+      ? decodeResourceSignal(props.resource_signal)
       : undefined;
   return {
     aiSource: normalizeAiSourceObservation(row, props, malformedMetadata),
@@ -334,8 +352,8 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
       : '',
     ts: Number.isFinite(timestamp) ? timestamp : Date.parse(String(row.ts)),
     path,
-    eventType: row.event_type === 'pageview' ? 'pageview' : 'event',
-    eventName: row.event_name === '404' ? '404' : label(row.event_name, 'unrecognized_event', 240),
+    eventType,
+    eventName,
     count: Number(row.event_count),
     traffic,
     version: tracking === 'unknown' || release === 'unknown' ? 'unknown' : `${tracking}/${release}`,
@@ -398,30 +416,31 @@ export function normalizeEvidence(row: Record<string, unknown>): EvidenceEvent {
       ? String(props.resource_kind)
       : '',
     resourceOriginKind:
-      resourceSignal &&
+      isResourceLoadError &&
       typeof props.resource_origin_kind === 'string' &&
       ['first_party', 'third_party'].includes(props.resource_origin_kind)
         ? (props.resource_origin_kind as ResourceOriginKind)
         : 'unknown',
     resourceAssetKind:
-      resourceSignal &&
+      isResourceLoadError &&
       typeof props.resource_asset_kind === 'string' &&
       ['app_asset', 'site_asset', 'external_asset'].includes(props.resource_asset_kind)
         ? (props.resource_asset_kind as ResourceAssetKind)
         : 'unknown',
     resourceProvider:
-      resourceSignal &&
+      isResourceLoadError &&
       typeof props.resource_provider === 'string' &&
       Object.hasOwn(RESOURCE_PROVIDER_LABELS, props.resource_provider)
         ? (props.resource_provider as ResourceProvider)
         : 'unknown',
     networkState:
-      resourceSignal &&
+      isResourceLoadError &&
       typeof props.network_state === 'string' &&
       Object.hasOwn(RESOURCE_NETWORK_LABELS, props.network_state)
         ? (props.network_state as ResourceNetworkState)
         : 'unknown',
     ...(resourceDiagnostic ? { resourceDiagnostic } : {}),
+    ...(resourceSignal ? { resourceSignal } : {}),
     quoteHandoff:
       row.event_name === 'concrete_workflow_result_cta_click' &&
       ['/concrete-quote-reviewer', '/concrete-contractor-bid-comparison'].includes(
@@ -476,6 +495,7 @@ export interface QualityIssue {
   resourceProvider?: ResourceProvider;
   networkState?: ResourceNetworkState;
   resourceDiagnostic?: ResourceDiagnostic;
+  resourceSignal?: ResourceSignal;
   events: number;
   sessions: number;
   firstAt: number;
@@ -769,6 +789,13 @@ export class QualityAccumulator {
           resourceOriginKind === 'first_party'
             ? sanitizeResourceDiagnostic(event.resourceDiagnostic)
             : undefined;
+        const resourceSignal =
+          failure.kind === 'resource_load_error' &&
+          event.eventName === 'concrete_workflow_resource_load_error' &&
+          event.eventType === 'event' &&
+          (event.resourceKind === 'img' || event.resourceKind === 'script')
+            ? sanitizeResourceSignal(event.resourceSignal)
+            : undefined;
         const key = JSON.stringify([
           event.path,
           event.version,
@@ -787,6 +814,7 @@ export class QualityAccumulator {
             ? ['resource_context_v1', resourceProvider, networkState]
             : []),
           ...(resourceDiagnostic ? ['resource_diagnostic_v1', resourceDiagnostic] : []),
+          ...(resourceSignal ? ['resource_signal_v1', resourceSignal] : []),
         ]);
         const issue = state.issues.get(key) ?? {
           key,
@@ -804,6 +832,7 @@ export class QualityAccumulator {
           resourceProvider,
           networkState,
           ...(resourceDiagnostic ? { resourceDiagnostic } : {}),
+          ...(resourceSignal ? { resourceSignal } : {}),
           events: 0,
           sessions: 1,
           firstAt: event.ts,
@@ -921,7 +950,16 @@ export class QualityAccumulator {
       ...this.actions.report(new Set(sessions.map(session => session.sessionId))),
       funnels: [...funnels.values()],
       issueSummary,
-      issues: [...issues.values()].sort((first, second) => second.sessions - first.sessions),
+      issues: [...issues.values()]
+        .map(({ resourceSignal: rawSignal, ...issue }) => {
+          const resourceSignal =
+            issue.kind === 'resource_load_error' &&
+            (issue.resourceKind === 'img' || issue.resourceKind === 'script')
+              ? sanitizeResourceSignal(rawSignal)
+              : undefined;
+          return { ...issue, ...(resourceSignal ? { resourceSignal } : {}) };
+        })
+        .sort((first, second) => second.sessions - first.sessions),
       unassociatedEvents: this.unassociatedEvents,
     };
   }
@@ -1003,8 +1041,12 @@ export function issueDiagnosis(issue: QualityIssue): { evidence: string; nextChe
     const asset = issue.resourceAssetKind ?? 'unknown';
     const provider = issue.resourceProvider ?? 'unknown';
     const network = issue.networkState ?? 'unknown';
+    const resourceSignal =
+      issue.resourceKind === 'img' || issue.resourceKind === 'script'
+        ? sanitizeResourceSignal(issue.resourceSignal)
+        : undefined;
     return {
-      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；供应商：${RESOURCE_PROVIDER_LABELS[provider]}；网络观测：${RESOURCE_NETWORK_LABELS[network]}。${issue.resourceDiagnostic ? `未记录资源URL；未确认本次失败请求的HTTP状态或根因。${resourceDiagnosticLines(issue.resourceDiagnostic).join(' ')}` : '未记录资源URL、HTTP状态或根因；历史缺字段保持未知。'}`,
+      evidence: `${RESOURCE_ORIGIN_LABELS[origin]} / ${RESOURCE_ASSET_LABELS[asset]}${issue.resourceKind ? ` / ${issue.resourceKind}` : ''}的加载错误信号；供应商：${RESOURCE_PROVIDER_LABELS[provider]}；网络观测：${RESOURCE_NETWORK_LABELS[network]}。${issue.resourceDiagnostic ? `未记录资源URL；未确认本次失败请求的HTTP状态或根因。${resourceDiagnosticLines(issue.resourceDiagnostic).join(' ')}` : '未记录资源URL、HTTP状态或根因；历史缺字段保持未知。'}${resourceSignal ? resourceSignalLines(resourceSignal).join(' ') : ''}`,
       nextCheck:
         origin === 'first_party'
           ? '在相同版本核对首方资源响应、缓存与浏览器控制台；应用资源分类不证明页面已不可用，须复现实际操作影响。'
@@ -1040,10 +1082,18 @@ export function issueMarkdown(
 ): string {
   const diagnosis = issueDiagnosis(issue);
   const resourceDiagnostic = sanitizeResourceDiagnostic(issue.resourceDiagnostic);
+  const resourceSignal =
+    issue.kind === 'resource_load_error' &&
+    (issue.resourceKind === 'img' || issue.resourceKind === 'script')
+      ? sanitizeResourceSignal(issue.resourceSignal)
+      : undefined;
   const diagnosticBlock =
     issue.kind === 'resource_load_error' && issue.resourceKind === 'img'
       ? `## 原生图片诊断（脱敏）\n${resourceDiagnosticLines(resourceDiagnostic).join('\n\n')}\n\n${resourceDiagnostic ? `\`\`\`json\n${JSON.stringify({ resourceDiagnostic }, null, 2)}\n\`\`\`\n\n` : ''}`
       : '';
+  const signalBlock = resourceSignal
+    ? `## 资源事件信号（脱敏）\n${resourceSignalLines(resourceSignal).join('\n\n')}\n\n\`\`\`json\n${JSON.stringify({ resourceSignal }, null, 2)}\n\`\`\`\n\n`
+    : '';
   return (
     `# 需求候选：${issue.kind} · ${issue.path}\n\n` +
     `- 状态：${review}（本机人工复核；非自动故障判定）\n- 复核时间：${reviewedAt ? new Date(reviewedAt).toISOString() : '未复核'}\n` +
@@ -1051,6 +1101,7 @@ export function issueMarkdown(
     `- 结果分类：${issue.outcome}；原因分类：${issue.reason}；表单：${issue.formKind}\n` +
     `- 有信号的collector会话：${issue.sessions}；事件信号：${issue.events}（不是已核实受影响人数）\n- 首次：${new Date(issue.firstAt).toISOString()}\n- 末次：${new Date(issue.lastAt).toISOString()}\n\n` +
     diagnosticBlock +
+    signalBlock +
     `## 原因线索（非根因结论）\n${diagnosis.evidence}\n\n## 建议核查\n${diagnosis.nextCheck}\n\n` +
     `## 待补复现\n1. 在对应版本与浏览器打开 ${issue.path}。\n2. 人工补充不含用户原文的操作步骤。\n3. 记录预期与实际结果；历史事件不证明当前仍有故障。\n\n` +
     `## 验收标准\n- 满足业务前提时原操作可完成；预期校验/权限/取消须有正确提示和恢复路径。\n- 成功与失败分别验证，重试成功不能抹掉先前的失败信号。\n- 新错误与旧版本信号分开；新事件晚于复核时间则重新核查。\n- 不采集输入原文、凭据或可识别个人信息。\n\n证据仅含脱敏聚合，不含会话原始标识；信号次数不等于独立故障次数。\n`

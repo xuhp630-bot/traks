@@ -227,7 +227,11 @@ export function BusinessHealth({
                       供应商：{RESOURCE_PROVIDER_LABELS[issue.resourceProvider ?? 'unknown']} ·
                       网络观测：{RESOURCE_NETWORK_LABELS[issue.networkState ?? 'unknown']}
                     </p>
-                    <ResourceDiagnosticDetails diagnostic={issue.resourceDiagnostic} />
+                    <ResourceDiagnosticDetails
+                      diagnostic={issue.resourceDiagnostic}
+                      signal={issue.resourceSignal}
+                      resourceKind={issue.resourceKind}
+                    />
                   </>
                 )}
                 <p className="break-words text-base text-[#6E6C7C] sm:text-sm">
